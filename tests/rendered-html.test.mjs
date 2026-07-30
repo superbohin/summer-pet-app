@@ -32,20 +32,30 @@ test("includes an installable offline-first manifest and service worker", async 
   const manifest = JSON.parse(manifestText);
   assert.equal(manifest.display, "standalone");
   assert.equal(manifest.start_url, "/");
+  assert.equal(manifest.id, "/");
   assert.equal(manifest.lang, "zh-CN");
   assert.ok(manifest.icons.some((icon) => icon.sizes === "512x512"));
-  assert.match(serviceWorker, /caches\.open/);
+  assert.match(serviceWorker, /CACHE_PREFIX = "summer-pet-shell-"/);
   assert.match(serviceWorker, /event\.request\.mode === "navigate"/);
+  assert.match(serviceWorker, /networkFirst\(event\.request, true\)/);
+  assert.match(serviceWorker, /requestUrl\.pathname\.includes\("\/assets\/"\)/);
   assert.match(serviceWorker, /caches\.match\("\/"\)/);
+  assert.doesNotMatch(serviceWorker, /indexedDB|localStorage|deleteDatabase/);
 });
 
-test("keeps core game rules explicit and idempotent", async () => {
-  const source = await readFile(new URL("../app/PetApp.tsx", import.meta.url), "utf8");
-  assert.match(source, /record\.completed\.includes\(task\.id\)/);
-  assert.match(source, /isFull && !record\.fullBonus/);
-  assert.match(source, /fullBonus: record\.fullBonus \|\| grantBonus/);
-  assert.match(source, /Math\.max\(0, current\.pet\.coins - reward\.coins/);
-  assert.match(source, /if \(current\.pet\.coins < pendingBuy\.price\) return current/);
-  assert.match(source, /isGameData\(parsed\)/);
-  assert.match(source, /再点一次，才会清空全部记录/);
+test("keeps update, migration and recovery safeguards explicit", async () => {
+  const [appSource, dataSource] = await Promise.all([
+    readFile(new URL("../app/PetApp.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../lib/game-data.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /record\.completed\.includes\(task\.id\)/);
+  assert.match(appSource, /createTransaction\("task-reward"/);
+  assert.match(appSource, /createTransaction\("purchase"/);
+  assert.match(appSource, /snapshotAndReplaceGameData\(imported, "before-manual-import"\)/);
+  assert.match(appSource, /createSafetySnapshot\(data, `before-app-update-/);
+  assert.match(appSource, /再点一次，才会清空全部记录/);
+  assert.match(dataSource, /indexedDB\.open\(DB_NAME, DB_VERSION\)/);
+  assert.match(dataSource, /before-schema-v/);
+  assert.match(dataSource, /corrupt-primary-recovery/);
+  assert.doesNotMatch(dataSource, /indexedDB\.deleteDatabase|localStorage\.clear/);
 });

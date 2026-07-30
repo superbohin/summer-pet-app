@@ -1,60 +1,25 @@
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  APP_VERSION,
+  CURRENT_SCHEMA_VERSION,
+  DataSafetyError,
+  FULL_BONUS_COINS,
+  createInitialGameData,
+  createSafetySnapshot,
+  createTransaction,
+  loadGameData,
+  prepareImportedGameData,
+  queueGameDataSave,
+  snapshotAndReplaceGameData,
+  type GameData,
+  type PetType,
+  type Task,
+  type TaskCategory,
+} from "../lib/game-data";
 
 type Tab = "today" | "home" | "shop" | "growth";
-type PetType = "dog" | "cat" | "dino";
-type TaskCategory = "reading" | "writing" | "sport" | "homework" | "tidy" | "help" | "sleep" | "custom";
-
-type Task = {
-  id: string;
-  title: string;
-  icon: string;
-  category: TaskCategory;
-  coins: number;
-  xp: number;
-  active: boolean;
-};
-
-type RewardSnapshot = {
-  title: string;
-  category: TaskCategory;
-  coins: number;
-  xp: number;
-};
-
-type DailyRecord = {
-  completed: string[];
-  rewards: Record<string, RewardSnapshot>;
-  fullBonus: boolean;
-  fullComplete: boolean;
-};
-
-type PetState = {
-  chosen: boolean;
-  type: PetType;
-  nickname: string;
-  coins: number;
-  xp: number;
-  hearts: number;
-  hunger: number;
-  happiness: number;
-  owned: string[];
-  equippedClothes: string | null;
-  equippedDecor: string | null;
-};
-
-type GameData = {
-  version: 1;
-  pet: PetState;
-  tasks: Task[];
-  records: Record<string, DailyRecord>;
-  badges: string[];
-  settings: {
-    sound: boolean;
-    animations: boolean;
-  };
-};
 
 type ShopItem = {
   id: string;
@@ -66,8 +31,6 @@ type ShopItem = {
   permanent: boolean;
 };
 
-const STORAGE_KEY = "summer-pet-v1";
-const FULL_BONUS_COINS = 20;
 const badgeDefinitions = [
   { id: "first", icon: "🌟", name: "第一次打卡", hint: "完成第一个任务" },
   { id: "reader", icon: "📚", name: "阅读小达人", hint: "累计阅读7天" },
@@ -106,29 +69,6 @@ const encouragements = [
   "小主人，我也在长大！",
   "坚持就是胜利！",
 ];
-
-function createInitialData(): GameData {
-  return {
-    version: 1,
-    pet: {
-      chosen: false,
-      type: "dog",
-      nickname: "小布丁",
-      coins: 30,
-      xp: 0,
-      hearts: 3,
-      hunger: 78,
-      happiness: 82,
-      owned: [],
-      equippedClothes: null,
-      equippedDecor: null,
-    },
-    tasks: defaultTasks,
-    records: {},
-    badges: [],
-    settings: { sound: true, animations: true },
-  };
-}
 
 function localDateKey(date = new Date()) {
   const year = date.getFullYear();
@@ -183,17 +123,6 @@ function achievedBadges(data: GameData) {
   return achieved;
 }
 
-function isGameData(value: unknown): value is GameData {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<GameData>;
-  return candidate.version === 1 &&
-    !!candidate.pet &&
-    Array.isArray(candidate.tasks) &&
-    !!candidate.records &&
-    Array.isArray(candidate.badges) &&
-    !!candidate.settings;
-}
-
 function petFace(type: PetType) {
   if (type === "cat") return { emoji: "🐱", label: "小猫" };
   if (type === "dino") return { emoji: "🦖", label: "小恐龙" };
@@ -220,9 +149,24 @@ function playTone(enabled: boolean, high = false) {
   }
 }
 
+function downloadTextFile(contents: string, filename: string) {
+  const blob = new Blob([contents], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function PetApp() {
-  const [data, setData] = useState<GameData>(createInitialData);
+  const [data, setData] = useState<GameData>(() => createInitialGameData(defaultTasks));
   const [hydrated, setHydrated] = useState(false);
+  const [storageIssue, setStorageIssue] = useState<DataSafetyError | null>(null);
+  const [saveIssue, setSaveIssue] = useState("");
+  const [migrationNotice, setMigrationNotice] = useState("");
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [updating, setUpdating] = useState(false);
   const [tab, setTab] = useState<Tab>("today");
   const [toast, setToast] = useState("");
   const [celebrating, setCelebrating] = useState(false);
@@ -244,29 +188,68 @@ export default function PetApp() {
   const streak = calculateStreak(data.records);
 
   useEffect(() => {
-    const hydrationTimer = window.setTimeout(() => {
-      try {
-        const saved = window.localStorage.getItem(STORAGE_KEY);
-        if (saved) {
-          const parsed: unknown = JSON.parse(saved);
-          if (isGameData(parsed)) setData(parsed);
+    let cancelled = false;
+    loadGameData(defaultTasks)
+      .then((result) => {
+        if (cancelled) return;
+        setData(result.data);
+        if (result.migratedFrom !== null) {
+          setMigrationNotice(`历史记录已从数据版本 v${result.migratedFrom} 安全升级到 v${CURRENT_SCHEMA_VERSION}`);
+        } else if (result.recoveredFromSnapshot) {
+          setMigrationNotice("检测到异常数据，已从最近的安全快照恢复");
         }
-      } catch {
-        setToast("记录读取失败，已安全使用默认设置");
-      } finally {
         setHydrated(true);
-      }
-    }, 0);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        const issue = error instanceof DataSafetyError
+          ? error
+          : new DataSafetyError("本地记录暂时无法安全读取，应用已停止写入。");
+        setStorageIssue(issue);
+        setHydrated(true);
+      });
+
+    void navigator.storage?.persist?.().catch(() => false);
+
+    const initialController = Boolean(navigator.serviceWorker?.controller);
+    const onControllerChange = () => {
+      if (initialController) setUpdateAvailable(true);
+    };
+    const onServiceWorkerMessage = (event: MessageEvent) => {
+      if (event.data?.type === "APP_UPDATE_READY") setUpdateAvailable(true);
+    };
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+      navigator.serviceWorker.addEventListener("controllerchange", onControllerChange);
+      navigator.serviceWorker.addEventListener("message", onServiceWorkerMessage);
+      navigator.serviceWorker.register("/sw.js").then((registration) => {
+        if (registration.waiting) setUpdateAvailable(true);
+        void registration.update();
+      }).catch(() => undefined);
     }
-    return () => window.clearTimeout(hydrationTimer);
+    fetch("/version.json", { cache: "no-store" })
+      .then((response) => response.ok ? response.json() : null)
+      .then((versionInfo: { version?: string } | null) => {
+        if (!cancelled && versionInfo?.version && versionInfo.version !== APP_VERSION) {
+          setUpdateAvailable(true);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.removeEventListener("controllerchange", onControllerChange);
+        navigator.serviceWorker.removeEventListener("message", onServiceWorkerMessage);
+      }
+    };
   }, []);
 
   useEffect(() => {
-    if (!hydrated) return;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  }, [data, hydrated]);
+    if (!hydrated || storageIssue) return;
+    queueGameDataSave(data)
+      .then(() => setSaveIssue(""))
+      .catch(() => setSaveIssue("本次记录暂未保存成功，请先不要关闭应用，并导出一份备份。"));
+  }, [data, hydrated, storageIssue]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setEyeReminder(true), 20 * 60 * 1000);
@@ -322,6 +305,24 @@ export default function PetApp() {
             fullComplete: isFull,
           },
         },
+        transactions: [
+          ...current.transactions,
+          createTransaction("task-reward", {
+            coinsDelta: task.coins,
+            xpDelta: task.xp,
+            heartsDelta: 0,
+            note: `完成：${task.title}`,
+            taskId: task.id,
+          }),
+          ...(grantBonus ? [
+            createTransaction("full-bonus", {
+              coinsDelta: FULL_BONUS_COINS,
+              xpDelta: 0,
+              heartsDelta: 1,
+              note: "今日全勤奖励",
+            }),
+          ] : []),
+        ],
       };
       return updateWithBadges(next, current.badges);
     });
@@ -352,6 +353,24 @@ export default function PetApp() {
           ...current.records,
           [todayKey]: { completed, rewards, fullBonus: false, fullComplete: false },
         },
+        transactions: [
+          ...current.transactions,
+          createTransaction("task-undo", {
+            coinsDelta: -reward.coins,
+            xpDelta: -reward.xp,
+            heartsDelta: 0,
+            note: `取消打卡：${reward.title}`,
+            taskId: task.id,
+          }),
+          ...(removeBonus ? [
+            createTransaction("bonus-reversal", {
+              coinsDelta: -FULL_BONUS_COINS,
+              xpDelta: 0,
+              heartsDelta: -1,
+              note: "取消今日全勤奖励",
+            }),
+          ] : []),
+        ],
       };
     });
     showToast("已取消这次打卡");
@@ -407,6 +426,17 @@ export default function PetApp() {
           equippedClothes: pendingBuy.type === "clothes" ? pendingBuy.id : current.pet.equippedClothes,
           equippedDecor: pendingBuy.type === "decor" ? pendingBuy.id : current.pet.equippedDecor,
         },
+        transactions: [
+          ...current.transactions,
+          createTransaction("purchase", {
+            coinsDelta: -pendingBuy.price,
+            xpDelta: 0,
+            heartsDelta: 0,
+            note: `兑换：${pendingBuy.name}`,
+            itemId: pendingBuy.id,
+            itemName: pendingBuy.name,
+          }),
+        ],
       };
     });
     playTone(data.settings.sound, true);
@@ -479,17 +509,18 @@ export default function PetApp() {
   };
 
   const deleteTask = (id: string) => {
-    setData((current) => ({ ...current, tasks: current.tasks.filter((task) => task.id !== id) }));
+    setData((current) => ({
+      ...current,
+      tasks: current.tasks.filter((task) => task.id !== id),
+      meta: {
+        ...current.meta,
+        taskTombstones: Array.from(new Set([...current.meta.taskTombstones, id])),
+      },
+    }));
   };
 
   const exportData = () => {
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `暑假小伙伴备份-${todayKey}.json`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    downloadTextFile(JSON.stringify(data, null, 2), `暑假小伙伴备份-${todayKey}.json`);
     showToast("备份文件已经准备好");
   };
 
@@ -499,24 +530,43 @@ export default function PetApp() {
     if (!file) return;
     try {
       const parsed: unknown = JSON.parse(await file.text());
-      if (!isGameData(parsed)) throw new Error("invalid");
-      setData(parsed);
+      const imported = await prepareImportedGameData(parsed);
+      await snapshotAndReplaceGameData(imported, "before-manual-import");
+      setData(imported);
       showToast("记录已经恢复！");
     } catch {
       showToast("这个备份文件无法使用，原记录没有改变");
     }
   };
 
-  const resetData = () => {
+  const resetData = async () => {
     if (!resetArmed) {
       setResetArmed(true);
       showToast("再点一次，才会清空全部记录");
       return;
     }
-    setData(createInitialData());
-    setResetArmed(false);
-    setParentStage("closed");
-    showToast("已恢复默认设置");
+    try {
+      const initial = createInitialGameData(defaultTasks);
+      await snapshotAndReplaceGameData(initial, "before-reset-to-default");
+      setData(initial);
+      setResetArmed(false);
+      setParentStage("closed");
+      showToast("已恢复默认设置，旧记录已保留安全快照");
+    } catch {
+      showToast("无法创建安全快照，已取消恢复默认设置");
+    }
+  };
+
+  const applyPreparedUpdate = async () => {
+    setUpdating(true);
+    try {
+      await createSafetySnapshot(data, `before-app-update-${APP_VERSION}`);
+      await queueGameDataSave(data);
+      window.location.reload();
+    } catch {
+      setUpdating(false);
+      showToast("安全快照尚未完成，暂不更新");
+    }
   };
 
   const calendarDays = useMemo(() => {
@@ -537,10 +587,37 @@ export default function PetApp() {
     return <main className="loading-screen" aria-live="polite"><div className="loading-paw">🐾</div><p>正在叫醒你的小伙伴…</p></main>;
   }
 
+  if (storageIssue) {
+    return (
+      <main className="safety-screen">
+        <section className="safety-card">
+          <span className="safety-icon">🛟</span>
+          <p className="eyebrow">DATA PROTECTION MODE</p>
+          <h1>记录保护模式</h1>
+          <p>{storageIssue.message}</p>
+          <p>应用没有创建空白记录，也没有覆盖原始数据。请先保存原始记录，再进行修复。</p>
+          {storageIssue.rawData && (
+            <button onClick={() => downloadTextFile(storageIssue.rawData ?? "", `暑假小伙伴-待修复原始数据-${todayKey}.json`)}>
+              下载原始记录
+            </button>
+          )}
+          <small>数据结构版本 v{CURRENT_SCHEMA_VERSION} · 应用版本 {APP_VERSION}</small>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className={`app-shell ${celebrating && data.settings.animations ? "is-celebrating" : ""}`}>
       <div className="sky-decoration sky-one" />
       <div className="sky-decoration sky-two" />
+
+      {updateAvailable && (
+        <aside className="update-banner" role="status">
+          <div><span>✨</span><p><strong>新版本已经准备好</strong><small>更新前会自动保存记录和安全快照</small></p></div>
+          <button onClick={applyPreparedUpdate} disabled={updating}>{updating ? "正在保护数据…" : "安全更新"}</button>
+        </aside>
+      )}
 
       <header className="topbar">
         <div className="brand">
@@ -568,6 +645,14 @@ export default function PetApp() {
           <div className="tiny-progress"><i style={{ width: `${levelProgress * 2}%` }} /></div>
         </div>
       </section>
+
+      {(migrationNotice || saveIssue) && (
+        <aside className={`data-notice ${saveIssue ? "warning" : ""}`} role="status">
+          <span>{saveIssue ? "⚠️" : "🛡️"}</span>
+          <p>{saveIssue || migrationNotice}</p>
+          {migrationNotice && !saveIssue && <button onClick={() => setMigrationNotice("")} aria-label="关闭提示">×</button>}
+        </aside>
+      )}
 
       <div className="page-content">
         {tab === "today" && (
@@ -754,6 +839,27 @@ export default function PetApp() {
                 })}
               </div>
             </section>
+
+            <section className="ledger-card">
+              <div className="section-heading compact">
+                <div><span className="section-label">HISTORY LEDGER</span><h2>成长与兑换流水</h2></div>
+                <p>共 {data.transactions.length} 条 · 更新不会删除</p>
+              </div>
+              <div className="ledger-list">
+                {[...data.transactions].reverse().slice(0, 12).map((transaction) => (
+                  <article key={transaction.id}>
+                    <span className="ledger-icon">
+                      {transaction.kind === "purchase" ? "🛍️" : transaction.coinsDelta < 0 ? "↩️" : "⭐"}
+                    </span>
+                    <div><strong>{transaction.note}</strong><small>{transaction.date}</small></div>
+                    <p className={transaction.coinsDelta < 0 ? "negative" : "positive"}>
+                      {transaction.coinsDelta > 0 ? "+" : ""}{transaction.coinsDelta} 🪙
+                      {transaction.xpDelta !== 0 && <small>{transaction.xpDelta > 0 ? "+" : ""}{transaction.xpDelta} 经验</small>}
+                    </p>
+                  </article>
+                ))}
+              </div>
+            </section>
           </section>
         )}
       </div>
@@ -827,9 +933,25 @@ export default function PetApp() {
               </div>
             </section>
 
+            <section className="settings-section data-safety-section">
+              <div className="data-safety-heading">
+                <span className="safety-shield">🛡️</span>
+                <div>
+                  <h3>数据安全与升级</h3>
+                  <p>应用版本 {APP_VERSION} · 数据结构 v{CURRENT_SCHEMA_VERSION} · 已保存 {data.transactions.length} 条收支流水</p>
+                </div>
+              </div>
+              <ul>
+                <li>程序更新只替换界面和功能，不会清除 IndexedDB 中的打卡、金币和兑换记录。</li>
+                <li>每次数据迁移、导入、重置和版本更新前都会先创建本地安全快照。</li>
+                <li>必须长期使用同一个网址；更换域名后，浏览器不会自动带入原网址的数据。</li>
+              </ul>
+              <p className="backup-reminder"><strong>建议每周导出一次备份，保存到 iPad“文件”或 iCloud Drive。</strong> 删除应用、清除 Safari 网站数据或设备损坏仍可能清除纯本地记录。</p>
+            </section>
+
             <section className="settings-section danger-zone">
               <h3>恢复默认设置</h3>
-              <p>会删除这台设备上的宠物、任务和全部打卡记录。</p>
+              <p>会把当前界面恢复为初始状态；操作前会保留一份内部安全快照。</p>
               <button onClick={resetData}>{resetArmed ? "确认清空全部记录" : "恢复默认设置"}</button>
             </section>
           </div>

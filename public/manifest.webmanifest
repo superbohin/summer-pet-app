@@ -1,6 +1,7 @@
 {
   "name": "我的暑假小伙伴",
   "short_name": "暑假小伙伴",
+  "id": "/",
   "description": "每天完成一点点，和宠物一起快乐长大！",
   "lang": "zh-CN",
   "start_url": "/",
