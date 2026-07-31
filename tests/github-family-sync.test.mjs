@@ -336,6 +336,16 @@ test("GitHub client reads contents, dispatches base64 events, and updates config
   assert.equal(Object.hasOwn(client, "token"), false);
   assert.equal((await client.readConfig("test-token")).sha, "config-sha-before");
   assert.deepEqual(await client.listEvents("test-token"), [event]);
+  calls.length = 0;
+  const indexed = await client.listEventsWithIndex(
+    "test-token",
+    new Set([event.id]),
+  );
+  assert.deepEqual(indexed, { events: [], remoteEventIds: [event.id] });
+  assert.equal(
+    calls.filter((call) => call.url.includes(`/contents/events/${event.id}.json`)).length,
+    0,
+  );
   await client.dispatchEvent("test-token", event);
   assert.equal(
     (await client.updateConfig("test-token", config, "config-sha-before")).sha,

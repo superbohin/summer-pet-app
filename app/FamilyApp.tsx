@@ -22,16 +22,17 @@ import {
   type FamilyConfig,
 } from "../lib/github-family-sync";
 import {
-  listQueuedFamilyEvents,
+  getFamilyOutboxStatus,
   loadFamilyConnectionProfile,
   saveFamilyConnectionProfile,
   type FamilyConnectionProfile,
+  type FamilyOutboxStatus,
 } from "../lib/family-device-store";
 import {
   publishFamilySnapshot,
   syncFamilyNow,
 } from "../lib/family-sync-service";
-import type { GameData } from "../lib/game-data";
+import { snapshotAndReplaceGameData, type GameData } from "../lib/game-data";
 
 type FamilyAppProps = {
   initialSurface?: PetAppSurface;
@@ -82,6 +83,14 @@ function lightweightDigest(data: GameData) {
   return `${value.length}:${(hash >>> 0).toString(16)}`;
 }
 
+const EMPTY_OUTBOX_STATUS: FamilyOutboxStatus = {
+  unsentCount: 0,
+  awaitingConfirmationCount: 0,
+  retryableCount: 0,
+  supersededCount: 0,
+  totalActiveCount: 0,
+};
+
 export default function FamilyApp({
   initialSurface = "combined",
 }: FamilyAppProps) {
@@ -91,7 +100,9 @@ export default function FamilyApp({
     surface === "combined" ? "approved" : "loading",
   );
   const [online, setOnline] = useState(true);
-  const [pendingCount, setPendingCount] = useState(0);
+  const [outboxStatus, setOutboxStatus] = useState<FamilyOutboxStatus>(
+    EMPTY_OUTBOX_STATUS,
+  );
   const [busy, setBusy] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [remoteData, setRemoteData] = useState<GameData | null>(null);
@@ -99,19 +110,28 @@ export default function FamilyApp({
   const [syncReady, setSyncReady] = useState(surface === "combined");
   const [localHydrated, setLocalHydrated] = useState(false);
   const currentData = useRef<GameData | null>(null);
+  const dataMutationRevision = useRef(0);
+  const remoteApplySequence = useRef(0);
   const publishQueue = useRef<Promise<void>>(Promise.resolve());
   const lastPublishedDigest = useRef("");
   const hydrationBaselineDigest = useRef<string | null>(null);
   const profileRef = useRef<FamilyConnectionProfile | null>(null);
   const initialSyncStarted = useRef(false);
+  const syncInFlight = useRef<Promise<void> | null>(null);
+  const lastAutomaticSyncAt = useRef(0);
 
   useEffect(() => {
     profileRef.current = profile;
   }, [profile]);
 
   const refreshPendingCount = useCallback(async () => {
-    const events = await listQueuedFamilyEvents().catch(() => []);
-    setPendingCount(events.length);
+    try {
+      setOutboxStatus(await getFamilyOutboxStatus());
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : "无法读取本机同步队列",
+      );
+    }
   }, []);
 
   useEffect(() => {
@@ -143,12 +163,78 @@ export default function FamilyApp({
     };
   }, [refreshPendingCount, surface]);
 
-  const persistProfile = useCallback(async (next: FamilyConnectionProfile) => {
-    await saveFamilyConnectionProfile(next);
+  const adoptProfile = useCallback((next: FamilyConnectionProfile) => {
     profileRef.current = next;
     setProfile(next);
     setStatus(profileStatus(next, surface === "combined" ? "child" : surface));
   }, [surface]);
+
+  const persistProfile = useCallback(async (next: FamilyConnectionProfile) => {
+    await saveFamilyConnectionProfile(next);
+    adoptProfile(next);
+  }, [adoptProfile]);
+
+  const runFamilySync = useCallback((
+    activeProfile: FamilyConnectionProfile,
+    local: GameData,
+    interactive: boolean,
+  ) => {
+    if (syncInFlight.current) return syncInFlight.current;
+    if (interactive) setBusy(true);
+    const task = (async () => {
+      const result = await syncFamilyNow(activeProfile, local, {
+        getLatestData: () => currentData.current ?? local,
+        getMutationRevision: () => dataMutationRevision.current,
+        persistData: (next, revision) =>
+          snapshotAndReplaceGameData(next, `before-family-sync-${revision}`),
+        applyData: (next, revision) => {
+          currentData.current = structuredClone(next);
+          remoteApplySequence.current += 1;
+          setRemoteData(structuredClone(next));
+          setRemoteRevision(
+            `family-sync:${revision}:${remoteApplySequence.current}`,
+          );
+        },
+      });
+      const latestProfile = profileRef.current;
+      const nextProfile = latestProfile &&
+        latestProfile.identity.deviceId === result.profile.identity.deviceId
+        ? {
+            ...result.profile,
+            config: (latestProfile.config?.version ?? -1) >
+                (result.profile.config?.version ?? -1)
+              ? latestProfile.config
+              : result.profile.config,
+            configSha: (latestProfile.config?.version ?? -1) >
+                (result.profile.config?.version ?? -1)
+              ? latestProfile.configSha
+              : result.profile.configSha,
+            lastPublishedDigest: latestProfile.lastPublishedDigest ??
+              result.profile.lastPublishedDigest,
+            lastObservedDigest: latestProfile.lastObservedDigest ??
+              result.profile.lastObservedDigest,
+            lastAppliedEventIds: Array.from(new Set([
+              ...result.profile.lastAppliedEventIds,
+              ...latestProfile.lastAppliedEventIds,
+            ])).slice(-2_000),
+            pendingDeviceRequests: latestProfile.pendingDeviceRequests,
+          }
+        : result.profile;
+      await saveFamilyConnectionProfile(nextProfile);
+      adoptProfile(nextProfile);
+      setOutboxStatus(result.outboxStatus);
+      setSyncReady(true);
+      setErrorMessage(result.syncError ?? "");
+      lastAutomaticSyncAt.current = Date.now();
+    })()
+      .finally(async () => {
+        syncInFlight.current = null;
+        if (interactive) setBusy(false);
+        await refreshPendingCount();
+      });
+    syncInFlight.current = task;
+    return task;
+  }, [adoptProfile, refreshPendingCount]);
 
   const refreshAccess = useCallback(async () => {
     const activeProfile = profileRef.current;
@@ -197,13 +283,7 @@ export default function FamilyApp({
       setStatus(profileStatus(next, requestedSurface));
       if (device.role !== requestedSurface) return;
       if (currentData.current) {
-        const synced = await syncFamilyNow(next, currentData.current);
-        await persistProfile(synced.profile);
-        setRemoteData(synced.data);
-        setRemoteRevision(
-          `${synced.profile.lastSyncAt}:${synced.appliedEventIds.at(-1) ?? "no-change"}`,
-        );
-        setSyncReady(true);
+        await runFamilySync(next, currentData.current, false);
       } else {
         // A newly approved device has not mounted and hydrated PetApp yet.
         // Keep the first-pull gate closed so its default/old local snapshot
@@ -227,7 +307,7 @@ export default function FamilyApp({
       setBusy(false);
       await refreshPendingCount();
     }
-  }, [persistProfile, refreshPendingCount, surface]);
+  }, [persistProfile, refreshPendingCount, runFamilySync, surface]);
 
   const createDeviceRequest = useCallback(async (
     input: CreateFamilyDeviceRequestInput,
@@ -324,6 +404,7 @@ export default function FamilyApp({
   }, [persistProfile]);
 
   const handleDataChange = useCallback((data: GameData) => {
+    dataMutationRevision.current += 1;
     currentData.current = data;
     setLocalHydrated(true);
     if (surface === "combined") return;
@@ -365,43 +446,31 @@ export default function FamilyApp({
       setProfile(observedProfile);
 
       try {
-        const result = await publishFamilySnapshot(observedProfile, data);
+        await publishFamilySnapshot(observedProfile, data, { flush: false });
         const queuedProfile = {
           ...observedProfile,
           lastPublishedDigest: digest,
         };
         lastPublishedDigest.current = digest;
-        await saveFamilyConnectionProfile(queuedProfile);
-        profileRef.current = queuedProfile;
-        setProfile(queuedProfile);
-        setErrorMessage(result.syncError ?? "");
+        await persistProfile(queuedProfile);
+        if (navigator.onLine) {
+          await runFamilySync(queuedProfile, data, false);
+        }
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : "家庭记录暂未进入同步队列");
       } finally {
         await refreshPendingCount();
       }
     });
-  }, [refreshPendingCount, surface, syncReady]);
+  }, [persistProfile, refreshPendingCount, runFamilySync, surface, syncReady]);
 
   const syncNow = useCallback(async () => {
     const activeProfile = profileRef.current;
     const local = currentData.current;
     if (!activeProfile || !local) throw new Error("本机记录尚未读取完成");
-    setBusy(true);
     setErrorMessage("");
-    try {
-      const result = await syncFamilyNow(activeProfile, local);
-      await persistProfile(result.profile);
-      setRemoteData(result.data);
-      setRemoteRevision(
-        `${result.profile.lastSyncAt}:${result.appliedEventIds.at(-1) ?? "no-change"}`,
-      );
-      setSyncReady(true);
-    } finally {
-      setBusy(false);
-      await refreshPendingCount();
-    }
-  }, [persistProfile, refreshPendingCount]);
+    await runFamilySync(activeProfile, local, true);
+  }, [runFamilySync]);
 
   useEffect(() => {
     if (
@@ -420,6 +489,47 @@ export default function FamilyApp({
       setErrorMessage(error instanceof Error ? error.message : "首次家庭同步失败");
     });
   }, [localHydrated, online, status, surface, syncNow, syncReady]);
+
+  useEffect(() => {
+    if (
+      surface === "combined" ||
+      !online ||
+      !localHydrated ||
+      status !== "approved" ||
+      !syncReady
+    ) {
+      return;
+    }
+    const trigger = () => {
+      if (
+        document.visibilityState !== "visible" ||
+        Date.now() - lastAutomaticSyncAt.current < 20_000
+      ) {
+        return;
+      }
+      const activeProfile = profileRef.current;
+      const local = currentData.current;
+      if (!activeProfile || !local) return;
+      lastAutomaticSyncAt.current = Date.now();
+      void runFamilySync(activeProfile, local, false).catch((error: unknown) => {
+        setErrorMessage(error instanceof Error ? error.message : "自动同步暂时失败");
+      });
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") trigger();
+    };
+    trigger();
+    const timer = window.setInterval(trigger, 60_000);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", trigger);
+    window.addEventListener("online", trigger);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", trigger);
+      window.removeEventListener("online", trigger);
+    };
+  }, [localHydrated, online, runFamilySync, status, surface, syncReady]);
 
   const addPendingRequest = useCallback(async (requestJson: string) => {
     const activeProfile = profileRef.current;
@@ -574,7 +684,11 @@ export default function FamilyApp({
       } : null}
       request={pendingRequest ? requestView(pendingRequest) : null}
       online={online}
-      pendingEventCount={pendingCount}
+      pendingEventCount={outboxStatus.totalActiveCount}
+      unsentEventCount={outboxStatus.unsentCount}
+      awaitingConfirmationCount={outboxStatus.awaitingConfirmationCount}
+      retryableEventCount={outboxStatus.retryableCount}
+      supersededEventCount={outboxStatus.supersededCount}
       lastSyncedAt={profile?.lastSyncAt}
       errorMessage={errorMessage}
       initialDeviceName={profile?.deviceLabel}

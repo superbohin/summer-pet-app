@@ -133,6 +133,11 @@ export type GitHubConfigResult = {
   sha: string;
 };
 
+export type GitHubEventBatch<T = unknown> = {
+  events: FamilyEventEnvelope<T>[];
+  remoteEventIds: string[];
+};
+
 export class FamilySyncValidationError extends Error {
   readonly code:
     | "invalid-config"
@@ -966,14 +971,27 @@ export class GitHubFamilyClient {
     init: RequestInit = {},
     allowNotFound = false,
   ): Promise<Response> {
-    const response = await this.fetchImpl(url, {
-      ...init,
-      headers: { ...githubHeaders(token), ...init.headers },
-    });
-    if (!response.ok && !(allowNotFound && response.status === 404)) {
-      throw new Error(`GitHub API request failed (${response.status})`);
+    const controller = new AbortController();
+    const timeout = globalThis.setTimeout(() => controller.abort(), 20_000);
+    try {
+      const response = await this.fetchImpl(url, {
+        ...((init.method ?? "GET") === "GET" ? { cache: "no-store" as const } : {}),
+        ...init,
+        signal: init.signal ?? controller.signal,
+        headers: { ...githubHeaders(token), ...init.headers },
+      });
+      if (!response.ok && !(allowNotFound && response.status === 404)) {
+        throw new Error(`GitHub API request failed (${response.status})`);
+      }
+      return response;
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new Error("GitHub 请求超时，请检查网络后重试");
+      }
+      throw error;
+    } finally {
+      globalThis.clearTimeout(timeout);
     }
-    return response;
   }
 
   private async readJsonFile<T>(token: string, path: string): Promise<{ value: T; sha: string }> {
@@ -993,38 +1011,55 @@ export class GitHubFamilyClient {
     return { config: result.value, sha: result.sha };
   }
 
-  async listEvents<T = unknown>(token: string): Promise<FamilyEventEnvelope<T>[]> {
+  async listEventsWithIndex<T = unknown>(
+    token: string,
+    excludeIds: ReadonlySet<string> = new Set(),
+  ): Promise<GitHubEventBatch<T>> {
     const response = await this.request(
       token,
       `${this.endpoint(`contents/${EVENTS_PATH}`)}?ref=${encodeURIComponent(this.branch)}`,
       {},
       true,
     );
-    if (response.status === 404) return [];
+    if (response.status === 404) return { events: [], remoteEventIds: [] };
     const entries = (await response.json()) as Array<{ name?: string; path?: string; type?: string }>;
     if (!Array.isArray(entries)) throw new Error("GitHub events path is not a directory");
     if (entries.length >= 1_000) {
       throw new Error("GitHub contents API directory limit reached; archive old events before continuing");
     }
-    const files = entries.filter(
-      (entry): entry is { name: string; path: string; type: string } =>
+    const files = entries.flatMap(
+      (entry): Array<{ id: string; path: string }> =>
         entry.type === "file" &&
         typeof entry.name === "string" &&
         entry.name.endsWith(".json") &&
-        typeof entry.path === "string",
+        typeof entry.path === "string"
+          ? [{ id: entry.name.slice(0, -5), path: entry.path }]
+          : [],
     );
+    const remoteEventIds = files.map((entry) => entry.id);
+    const unreadFiles = files.filter((entry) => !excludeIds.has(entry.id));
     const events: FamilyEventEnvelope<T>[] = [];
-    for (let start = 0; start < files.length; start += 20) {
+    for (let start = 0; start < unreadFiles.length; start += 20) {
       const batch = await Promise.all(
-        files
+        unreadFiles
           .slice(start, start + 20)
-          .map(async (entry) =>
-            (await this.readJsonFile<FamilyEventEnvelope<T>>(token, entry.path)).value
-          ),
+          .map(async (entry) => {
+            const event = (
+              await this.readJsonFile<FamilyEventEnvelope<T>>(token, entry.path)
+            ).value;
+            if (event.id !== entry.id) {
+              throw new Error(`GitHub event file name does not match envelope ID: ${entry.id}`);
+            }
+            return event;
+          }),
       );
       events.push(...batch);
     }
-    return dedupeAndSortEvents(events);
+    return { events: dedupeAndSortEvents(events), remoteEventIds };
+  }
+
+  async listEvents<T = unknown>(token: string): Promise<FamilyEventEnvelope<T>[]> {
+    return (await this.listEventsWithIndex<T>(token)).events;
   }
 
   async dispatchEvent(token: string, event: FamilyEventEnvelope): Promise<void> {

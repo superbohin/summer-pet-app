@@ -39,6 +39,19 @@ export type QueuedFamilyEvent = {
   attempts: number;
   lastError?: string;
   dispatchedAt?: string;
+  /**
+   * Full snapshots are cumulative. A newer snapshot can supersede an older
+   * local queue record without deleting it until the replacement is confirmed.
+   */
+  supersededBy?: string;
+};
+
+export type FamilyOutboxStatus = {
+  unsentCount: number;
+  awaitingConfirmationCount: number;
+  retryableCount: number;
+  supersededCount: number;
+  totalActiveCount: number;
 };
 
 const DB_NAME = "summer-pet-family-sync";
@@ -128,7 +141,23 @@ export async function enqueueFamilyEvent(envelope: FamilyEventEnvelope) {
   const database = await openDatabase();
   try {
     const transaction = database.transaction(QUEUE_STORE, "readwrite");
-    transaction.objectStore(QUEUE_STORE).put({
+    const store = transaction.objectStore(QUEUE_STORE);
+    const existing = await requestResult(
+      store.getAll() as IDBRequest<QueuedFamilyEvent[]>,
+    );
+    if (envelope.op === "state.snapshot") {
+      for (const item of existing) {
+        if (
+          item.id !== envelope.id &&
+          item.envelope.op === "state.snapshot" &&
+          item.envelope.deviceId === envelope.deviceId &&
+          item.envelope.role === envelope.role
+        ) {
+          store.put({ ...item, supersededBy: envelope.id } satisfies QueuedFamilyEvent);
+        }
+      }
+    }
+    store.put({
       id: envelope.id,
       createdAt: envelope.timestamp,
       envelope,
@@ -151,6 +180,81 @@ export async function listQueuedFamilyEvents() {
     return events.sort((left, right) =>
       left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)
     );
+  } finally {
+    database.close();
+  }
+}
+
+export function summarizeFamilyOutbox(
+  events: readonly QueuedFamilyEvent[],
+  now = Date.now(),
+  retryAfterMs = 15 * 60 * 1_000,
+): FamilyOutboxStatus {
+  let unsentCount = 0;
+  let awaitingConfirmationCount = 0;
+  let retryableCount = 0;
+  let supersededCount = 0;
+  for (const item of events) {
+    if (item.supersededBy) {
+      supersededCount += 1;
+      continue;
+    }
+    if (!item.dispatchedAt) {
+      unsentCount += 1;
+      continue;
+    }
+    const dispatchedAt = Date.parse(item.dispatchedAt);
+    if (!Number.isFinite(dispatchedAt) || now - dispatchedAt >= retryAfterMs) {
+      retryableCount += 1;
+    } else {
+      awaitingConfirmationCount += 1;
+    }
+  }
+  return {
+    unsentCount,
+    awaitingConfirmationCount,
+    retryableCount,
+    supersededCount,
+    totalActiveCount: unsentCount + awaitingConfirmationCount + retryableCount,
+  };
+}
+
+export async function getFamilyOutboxStatus() {
+  await compactFamilyOutboxSnapshots();
+  return summarizeFamilyOutbox(await listQueuedFamilyEvents());
+}
+
+export async function compactFamilyOutboxSnapshots() {
+  const database = await openDatabase();
+  try {
+    const transaction = database.transaction(QUEUE_STORE, "readwrite");
+    const store = transaction.objectStore(QUEUE_STORE);
+    const events = await requestResult(
+      store.getAll() as IDBRequest<QueuedFamilyEvent[]>,
+    );
+    const groups = new Map<string, QueuedFamilyEvent[]>();
+    for (const item of events) {
+      if (item.envelope.op !== "state.snapshot") continue;
+      const key = `${item.envelope.deviceId}:${item.envelope.role}:${item.envelope.op}`;
+      groups.set(key, [...(groups.get(key) ?? []), item]);
+    }
+    for (const group of groups.values()) {
+      if (group.length < 2) continue;
+      const ordered = [...group].sort((left, right) =>
+        left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)
+      );
+      const replacement = ordered.at(-1) as QueuedFamilyEvent;
+      for (const item of ordered) {
+        if (item.id === replacement.id) {
+          if (item.supersededBy) {
+            store.put({ ...item, supersededBy: undefined } satisfies QueuedFamilyEvent);
+          }
+        } else if (item.supersededBy !== replacement.id) {
+          store.put({ ...item, supersededBy: replacement.id } satisfies QueuedFamilyEvent);
+        }
+      }
+    }
+    await transactionDone(transaction);
   } finally {
     database.close();
   }
@@ -205,6 +309,35 @@ export async function removeQueuedFamilyEvent(id: string) {
   try {
     const transaction = database.transaction(QUEUE_STORE, "readwrite");
     transaction.objectStore(QUEUE_STORE).delete(id);
+    await transactionDone(transaction);
+  } finally {
+    database.close();
+  }
+}
+
+export async function confirmQueuedFamilyEvents(ids: readonly string[]) {
+  if (ids.length === 0) return;
+  const confirmed = new Set(ids);
+  const database = await openDatabase();
+  try {
+    const transaction = database.transaction(QUEUE_STORE, "readwrite");
+    const store = transaction.objectStore(QUEUE_STORE);
+    const events = await requestResult(
+      store.getAll() as IDBRequest<QueuedFamilyEvent[]>,
+    );
+    const confirmedReplacementIds = new Set(
+      events
+        .filter((item) => confirmed.has(item.id) && !item.supersededBy)
+        .map((item) => item.id),
+    );
+    for (const item of events) {
+      if (
+        confirmed.has(item.id) ||
+        (item.supersededBy && confirmedReplacementIds.has(item.supersededBy))
+      ) {
+        store.delete(item.id);
+      }
+    }
     await transactionDone(transaction);
   } finally {
     database.close();

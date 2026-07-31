@@ -315,9 +315,7 @@ export default function PetApp({
     appliedRemoteRevision.current = remoteRevision;
     const next = structuredClone(remoteData);
     lastEmittedData.current = JSON.stringify(next);
-    void snapshotAndReplaceGameData(next, `before-family-sync-${remoteRevision}`)
-      .then(() => setData(next))
-      .catch(() => setSaveIssue("家庭同步记录暂时无法安全写入，本机原记录没有被覆盖。"));
+    setData(next);
   }, [hydrated, remoteData, remoteRevision]);
 
   useEffect(() => {
@@ -371,6 +369,11 @@ export default function PetApp({
     setToast(message);
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(""), 2600);
+  };
+
+  const navigateToTab = (nextTab: Tab) => {
+    setTab(nextTab);
+    window.requestAnimationFrame(() => window.scrollTo(0, 0));
   };
 
   const updateWithBadges = (next: GameData, previousBadges: string[]) => {
@@ -873,7 +876,7 @@ export default function PetApp({
       </header>
 
       <section className="status-strip" aria-label="宠物状态">
-        <button className="mini-pet" onClick={() => setTab("home")} aria-label={`去看看${data.pet.nickname}`}>
+        <button className="mini-pet" onClick={() => navigateToTab("home")} aria-label={`去看看${data.pet.nickname}`}>
           <img src={appBaseUrl(pet.image)} alt="" />
           <strong>{data.pet.nickname}</strong>
         </button>
@@ -1206,10 +1209,10 @@ export default function PetApp({
       </div>}
 
       {childSurface && <nav className="bottom-nav" aria-label="主要页面">
-        <button className={tab === "today" ? "active" : ""} onClick={() => setTab("today")}><span>✅</span><strong>今日</strong></button>
-        <button className={tab === "home" ? "active" : ""} onClick={() => setTab("home")}><span>🏠</span><strong>小屋</strong></button>
-        <button className={tab === "shop" ? "active" : ""} onClick={() => setTab("shop")}><span>🛍️</span><strong>商店</strong></button>
-        <button className={tab === "growth" ? "active" : ""} onClick={() => setTab("growth")}><span>🌱</span><strong>成长</strong></button>
+        <button className={tab === "today" ? "active" : ""} onClick={() => navigateToTab("today")}><span>✅</span><strong>今日</strong></button>
+        <button className={tab === "home" ? "active" : ""} onClick={() => navigateToTab("home")}><span>🏠</span><strong>小屋</strong></button>
+        <button className={tab === "shop" ? "active" : ""} onClick={() => navigateToTab("shop")}><span>🛍️</span><strong>商店</strong></button>
+        <button className={tab === "growth" ? "active" : ""} onClick={() => navigateToTab("growth")}><span>🌱</span><strong>成长</strong></button>
       </nav>}
 
       {childSurface && !data.pet.chosen && <PetPicker onChoose={choosePet} />}
@@ -1353,7 +1356,7 @@ export default function PetApp({
                 <div className="parent-pet-picker">
                   <button className="selected" onClick={() => {
                     setParentStage("closed");
-                    setTab("shop");
+                    navigateToTab("shop");
                   }}>
                     <img src={appBaseUrl(pet.image)} alt="" /><span>{pet.name} · 打开图鉴</span>
                   </button>

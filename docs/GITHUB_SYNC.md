@@ -111,16 +111,19 @@ await client.updateConfig(parentToken, next, sha);
 
 Workflow 使用仓库级 concurrency 串行执行，权限仅为 `contents: write`。Action 不解密负载，也不运行负载内容。
 
-拉取时 `listEvents()` 读取 JSON 文件，按 `timestamp`、`id` 排序并去除完全相同的重复 ID；同一 ID 对应不同内容会作为冲突拒绝。当前实现使用 GitHub Contents API，单个 `events/` 目录达到 1,000 个文件时会明确停止，部署前应规划后续的签名归档或分区升级，不能静默漏读。
+拉取时先读取 `events/` 文件索引，再只下载本机尚未应用或仍在 outbox 等待确认的 JSON 文件；已应用事件不会在每次自动同步时反复下载。事件按 `timestamp`、`id` 排序并去除完全相同的重复 ID；同一 ID 对应不同内容会作为冲突拒绝。当前实现使用 GitHub Contents API，单个 `events/` 目录达到 1,000 个文件时会明确停止，部署前应规划后续的签名归档或分区升级，不能静默漏读。
 
 ## 离线队列
 
-离线时先完成本地 IndexedDB 事务，再把已经加密并签名的 envelope 放入本地 outbox。网络恢复后逐条 `workflow_dispatch`。只有 Action 成功追加并在下一次拉取中出现该 ID，才从 outbox 删除。
+离线时先完成本地 IndexedDB 事务，再把已经加密并签名的 envelope 放入本地 outbox。联网同步严格先拉取远端确认，再决定是否重试或发送；同一家庭在任意时刻最多主动发送一条快照。只有 Action 成功追加、远端 envelope 与本机完全一致、签名验证通过，而且合并数据与 profile 已按顺序安全落盘后，才从 outbox 删除。
+
+`state.snapshot` 是包含完整历史的累积快照。同一设备和角色产生新快照时，旧队列记录会标记为由最新快照替代，但在替代快照获得远端确认前不会直接删除。这样升级前积累的连续快照可收敛为一个活动项，同时仍保留恢复链路。界面分别显示“尚未发送”“已发送待确认”和“等待重试”；联网、回到前台和每分钟定时检查都会自动确认。
 
 - 重试必须复用原事件 ID、密文和签名，不能每次生成新事件。
 - `EEXIST` 需要拉取并比较同 ID 内容；不同内容是完整性冲突。
 - 多设备合并应保持幂等，不能以“最后一个完整快照覆盖全部状态”代替事件归并。
 - GitHub Actions 是异步的；dispatch 返回成功的 2xx 只表示请求已接收，不表示事件已提交。
+- 最近一次 dispatch 在 15 分钟内仍未确认时不会继续发送后续事件；超时后也必须再次先拉取，确认远端确实不存在才复用原 envelope 重试。
 
 ## Fine-grained PAT
 

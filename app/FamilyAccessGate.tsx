@@ -61,6 +61,10 @@ export interface FamilyAccessGateProps {
   request?: FamilyDeviceRequest | null;
   online?: boolean;
   pendingEventCount?: number;
+  unsentEventCount?: number;
+  awaitingConfirmationCount?: number;
+  retryableEventCount?: number;
+  supersededEventCount?: number;
   lastSyncedAt?: string | null;
   errorMessage?: string;
   initialDeviceName?: string;
@@ -158,12 +162,20 @@ function CopyField({
 function StatusNotice({
   online,
   pendingEventCount,
+  unsentEventCount,
+  awaitingConfirmationCount,
+  retryableEventCount,
+  supersededEventCount,
   syncing,
   errorMessage,
   onSync,
 }: {
   online: boolean;
   pendingEventCount: number;
+  unsentEventCount: number;
+  awaitingConfirmationCount: number;
+  retryableEventCount: number;
+  supersededEventCount: number;
   syncing: boolean;
   errorMessage?: string;
   onSync?: () => Promise<void>;
@@ -171,6 +183,13 @@ function StatusNotice({
   const offline = !online;
   const hasPendingEvents = pendingEventCount > 0;
   const hasError = Boolean(errorMessage);
+  const queueDetails = [
+    unsentEventCount > 0 ? `${unsentEventCount} 条尚未发送` : "",
+    awaitingConfirmationCount > 0
+      ? `${awaitingConfirmationCount} 条已发送待确认`
+      : "",
+    retryableEventCount > 0 ? `${retryableEventCount} 条等待重试` : "",
+  ].filter(Boolean).join("，");
   if (!offline && !hasPendingEvents && !hasError) return null;
 
   return (
@@ -193,10 +212,14 @@ function StatusNotice({
             : offline
             ? `新操作会安全留在本机，联网后再同步${
                 hasPendingEvents
-                  ? `；本机还有 ${pendingEventCount} 条事件待同步`
+                  ? `；${queueDetails}`
                   : ""
               }。`
-            : `本机有 ${pendingEventCount} 条事件尚未同步。`}
+            : `${queueDetails || `本机有 ${pendingEventCount} 条内容待同步`}。${
+                supersededEventCount > 0
+                  ? ` 已自动合并 ${supersededEventCount} 条连续旧快照。`
+                  : ""
+              }`}
         </p>
       </div>
       {!offline && onSync ? (
@@ -220,6 +243,10 @@ export default function FamilyAccessGate({
   request,
   online = true,
   pendingEventCount = 0,
+  unsentEventCount = 0,
+  awaitingConfirmationCount = 0,
+  retryableEventCount = 0,
+  supersededEventCount = 0,
   lastSyncedAt,
   errorMessage,
   initialDeviceName = "",
@@ -541,6 +568,10 @@ export default function FamilyAccessGate({
           <StatusNotice
             online={online}
             pendingEventCount={pendingEventCount}
+            unsentEventCount={unsentEventCount}
+            awaitingConfirmationCount={awaitingConfirmationCount}
+            retryableEventCount={retryableEventCount}
+            supersededEventCount={supersededEventCount}
             syncing={busy}
             errorMessage={errorMessage || operationError}
             onSync={syncNow}
@@ -552,10 +583,22 @@ export default function FamilyAccessGate({
             {content}
           </section>
           <footer className="family-sync-footer">
-            <span>
-              {online ? "已批准设备" : "离线本机模式"} · 上次同步：
-              {formatDateTime(lastSyncedAt)}
-            </span>
+            <div>
+              <span>
+                {online ? "已批准设备" : "离线本机模式"} · 上次同步：
+                {formatDateTime(lastSyncedAt)}
+              </span>
+              {online && syncNow ? (
+                <button
+                  type="button"
+                  className="family-footer-sync"
+                  onClick={() => void syncNow()}
+                  disabled={busy}
+                >
+                  {busy ? "同步中…" : "立即同步"}
+                </button>
+              ) : null}
+            </div>
             <code>{device?.deviceId}</code>
           </footer>
         </>
