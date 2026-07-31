@@ -1,4 +1,5 @@
 "use client";
+/* eslint-disable @next/next/no-img-element -- local PWA pet assets are pre-cached for offline use */
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -6,13 +7,17 @@ import {
   CURRENT_SCHEMA_VERSION,
   DataSafetyError,
   FULL_BONUS_COINS,
+  applyMissedFeedPenalties,
+  approveTaskSubmission,
   createInitialGameData,
   createSafetySnapshot,
   createTransaction,
   loadGameData,
   prepareImportedGameData,
   queueGameDataSave,
+  revokeTaskApproval,
   snapshotAndReplaceGameData,
+  submitTaskForApproval,
   type GameData,
   type PetType,
   type Task,
@@ -42,13 +47,13 @@ const badgeDefinitions = [
 ];
 
 const defaultTasks: Task[] = [
-  { id: "read", title: "阅读20分钟", icon: "📖", category: "reading", coins: 10, xp: 5, active: true },
-  { id: "write", title: "练字一页", icon: "✍️", category: "writing", coins: 10, xp: 5, active: true },
-  { id: "sport", title: "运动30分钟", icon: "⚽", category: "sport", coins: 10, xp: 5, active: true },
-  { id: "homework", title: "完成暑假作业", icon: "📝", category: "homework", coins: 10, xp: 5, active: true },
-  { id: "tidy", title: "整理自己的物品", icon: "🧸", category: "tidy", coins: 10, xp: 5, active: true },
-  { id: "help", title: "帮家里做一件小事", icon: "🧹", category: "help", coins: 10, xp: 5, active: true },
-  { id: "sleep", title: "21:30前准备睡觉", icon: "🌙", category: "sleep", coins: 10, xp: 5, active: true },
+  { id: "read", title: "阅读20分钟", icon: "📖", category: "reading", coins: 10, xp: 5, active: true, proofPrompt: "写下今天读的书名和页码" },
+  { id: "write", title: "练字一页", icon: "✍️", category: "writing", coins: 10, xp: 5, active: true, proofPrompt: "写下练习内容，把练字本交给家长" },
+  { id: "sport", title: "运动30分钟", icon: "⚽", category: "sport", coins: 10, xp: 5, active: true, proofPrompt: "写下运动项目和大约时长" },
+  { id: "homework", title: "完成暑假作业", icon: "📝", category: "homework", coins: 10, xp: 5, active: true, proofPrompt: "写下完成了哪一页或哪几题" },
+  { id: "tidy", title: "整理自己的物品", icon: "🧸", category: "tidy", coins: 10, xp: 5, active: true, proofPrompt: "写下整理了什么，请家长现场查看" },
+  { id: "help", title: "帮家里做一件小事", icon: "🧹", category: "help", coins: 10, xp: 5, active: true, proofPrompt: "写下帮家里做了什么" },
+  { id: "sleep", title: "21:30前准备睡觉", icon: "🌙", category: "sleep", coins: 10, xp: 5, active: true, proofPrompt: "睡前请家长当面验收" },
 ];
 
 const shopItems: ShopItem[] = [
@@ -124,10 +129,13 @@ function achievedBadges(data: GameData) {
 }
 
 function petFace(type: PetType) {
-  if (type === "cat") return { emoji: "🐱", label: "小猫" };
-  if (type === "dino") return { emoji: "🦖", label: "小恐龙" };
-  return { emoji: "🐶", label: "小狗" };
+  if (type === "cat") return { image: "/pets/cat-v2.png", label: "银蓝小猫" };
+  if (type === "snake") return { image: "/pets/snake-v2.png", label: "翡翠小蛇" };
+  if (type === "dino") return { image: "/pets/dino-v2.png", label: "青绿恐龙" };
+  return { image: "/pets/dog-v2.png", label: "阳光小狗" };
 }
+
+const petTypes: PetType[] = ["dog", "cat", "snake", "dino"];
 
 function playTone(enabled: boolean, high = false) {
   if (!enabled || typeof window === "undefined") return;
@@ -170,19 +178,25 @@ export default function PetApp() {
   const [tab, setTab] = useState<Tab>("today");
   const [toast, setToast] = useState("");
   const [celebrating, setCelebrating] = useState(false);
-  const [parentStage, setParentStage] = useState<"closed" | "challenge" | "open">("closed");
-  const [answer, setAnswer] = useState("");
+  const [parentStage, setParentStage] = useState<"closed" | "setup" | "challenge" | "open">("closed");
+  const [pinInput, setPinInput] = useState("");
+  const [pinConfirm, setPinConfirm] = useState("");
   const [parentError, setParentError] = useState("");
   const [newTask, setNewTask] = useState("");
+  const [submissionTask, setSubmissionTask] = useState<Task | null>(null);
+  const [proofNote, setProofNote] = useState("");
   const [pendingBuy, setPendingBuy] = useState<ShopItem | null>(null);
   const [resetArmed, setResetArmed] = useState(false);
   const [eyeReminder, setEyeReminder] = useState(false);
   const [installHelp, setInstallHelp] = useState(false);
+  const [todayKey, setTodayKey] = useState(() => localDateKey());
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const todayKey = localDateKey();
   const activeTasks = data.tasks.filter((task) => task.active);
   const todayRecord = data.records[todayKey] ?? { completed: [], rewards: {}, fullBonus: false, fullComplete: false };
   const completedCount = activeTasks.filter((task) => todayRecord.completed.includes(task.id)).length;
+  const pendingSubmissions = data.submissions.filter((submission) => submission.status === "pending");
+  const todayPending = pendingSubmissions.filter((submission) => submission.date === todayKey);
+  const fedToday = data.care.fedDates.includes(todayKey);
   const level = getLevel(data.pet.xp);
   const levelProgress = data.pet.xp % 50;
   const streak = calculateStreak(data.records);
@@ -192,12 +206,18 @@ export default function PetApp() {
     loadGameData(defaultTasks)
       .then((result) => {
         if (cancelled) return;
-        setData(result.data);
+        const careResult = applyMissedFeedPenalties(result.data, localDateKey());
+        setData(careResult.data);
+        const notices: string[] = [];
         if (result.migratedFrom !== null) {
-          setMigrationNotice(`历史记录已从数据版本 v${result.migratedFrom} 安全升级到 v${CURRENT_SCHEMA_VERSION}`);
+          notices.push(`历史记录已从数据版本 v${result.migratedFrom} 安全升级到 v${CURRENT_SCHEMA_VERSION}`);
         } else if (result.recoveredFromSnapshot) {
-          setMigrationNotice("检测到异常数据，已从最近的安全快照恢复");
+          notices.push("检测到异常数据，已从最近的安全快照恢复");
         }
+        if (careResult.appliedDates.length > 0) {
+          notices.push(`有 ${careResult.appliedDates.length} 天忘记喂宠物，已按家长规则记录惩罚`);
+        }
+        setMigrationNotice(notices.join("；"));
         setHydrated(true);
       })
       .catch((error: unknown) => {
@@ -252,6 +272,28 @@ export default function PetApp() {
   }, [data, hydrated, storageIssue]);
 
   useEffect(() => {
+    if (!hydrated || storageIssue) return;
+    const reconcileDateAndCare = () => {
+      const currentDate = localDateKey();
+      setTodayKey(currentDate);
+      setData((current) => applyMissedFeedPenalties(current, currentDate).data);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") reconcileDateAndCare();
+    };
+
+    reconcileDateAndCare();
+    const timer = window.setInterval(reconcileDateAndCare, 60 * 1000);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", reconcileDateAndCare);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", reconcileDateAndCare);
+    };
+  }, [hydrated, storageIssue]);
+
+  useEffect(() => {
     const timer = window.setTimeout(() => setEyeReminder(true), 20 * 60 * 1000);
     return () => window.clearTimeout(timer);
   }, []);
@@ -276,103 +318,60 @@ export default function PetApp() {
     return { ...next, badges };
   };
 
-  const completeTask = (task: Task) => {
-    if (todayRecord.completed.includes(task.id)) return;
-    setData((current) => {
-      const record = current.records[todayKey] ?? { completed: [], rewards: {}, fullBonus: false, fullComplete: false };
-      if (record.completed.includes(task.id)) return current;
-      const completed = [...record.completed, task.id];
-      const currentActive = current.tasks.filter((item) => item.active);
-      const isFull = currentActive.length > 0 && currentActive.every((item) => completed.includes(item.id));
-      const grantBonus = isFull && !record.fullBonus;
-      const next: GameData = {
-        ...current,
-        pet: {
-          ...current.pet,
-          coins: current.pet.coins + task.coins + (grantBonus ? FULL_BONUS_COINS : 0),
-          xp: current.pet.xp + task.xp,
-          hearts: current.pet.hearts + (grantBonus ? 1 : 0),
-        },
-        records: {
-          ...current.records,
-          [todayKey]: {
-            completed,
-            rewards: {
-              ...record.rewards,
-              [task.id]: { title: task.title, category: task.category, coins: task.coins, xp: task.xp },
-            },
-            fullBonus: record.fullBonus || grantBonus,
-            fullComplete: isFull,
-          },
-        },
-        transactions: [
-          ...current.transactions,
-          createTransaction("task-reward", {
-            coinsDelta: task.coins,
-            xpDelta: task.xp,
-            heartsDelta: 0,
-            note: `完成：${task.title}`,
-            taskId: task.id,
-          }),
-          ...(grantBonus ? [
-            createTransaction("full-bonus", {
-              coinsDelta: FULL_BONUS_COINS,
-              xpDelta: 0,
-              heartsDelta: 1,
-              note: "今日全勤奖励",
-            }),
-          ] : []),
-        ],
-      };
-      return updateWithBadges(next, current.badges);
-    });
+  const openSubmission = (task: Task) => {
+    setSubmissionTask(task);
+    setProofNote("");
+  };
+
+  const submitTask = () => {
+    if (!submissionTask) return;
+    const note = proofNote.trim();
+    if (note.length < 2) {
+      showToast("请先写清楚完成情况");
+      return;
+    }
+    setData((current) => submitTaskForApproval(current, submissionTask.id, todayKey, note).data);
+    setSubmissionTask(null);
+    setProofNote("");
+    showToast("已提交，等待家长验收");
+  };
+
+  const cancelSubmission = (submissionId: string) => {
+    setData((current) => ({
+      ...current,
+      submissions: current.submissions.filter((submission) => submission.id !== submissionId || submission.status !== "pending"),
+    }));
+    showToast("已撤回这次申请");
+  };
+
+  const approveSubmission = (submissionId: string) => {
+    const result = approveTaskSubmission(data, submissionId);
+    if (!result.approved) {
+      showToast("这项任务已失效，请退回后重新提交");
+      return;
+    }
+    setData(updateWithBadges(result.data, data.badges));
     playTone(data.settings.sound, true);
     setCelebrating(true);
     setTimeout(() => setCelebrating(false), data.settings.animations ? 1200 : 0);
-    showToast(encouragements[(completedCount + data.pet.xp) % encouragements.length]);
+    showToast(`验收通过！${encouragements[(completedCount + data.pet.xp) % encouragements.length]}`);
+  };
+
+  const rejectSubmission = (submissionId: string) => {
+    const reviewedAt = new Date().toISOString();
+    setData((current) => ({
+      ...current,
+      submissions: current.submissions.map((submission) =>
+        submission.id === submissionId && submission.status === "pending"
+          ? { ...submission, status: "rejected" as const, reviewedAt }
+          : submission
+      ),
+    }));
+    showToast("已退回，请孩子完成后重新提交");
   };
 
   const undoTask = (task: Task) => {
-    setData((current) => {
-      const record = current.records[todayKey];
-      const reward = record?.rewards[task.id];
-      if (!record || !reward) return current;
-      const completed = record.completed.filter((id) => id !== task.id);
-      const rewards = { ...record.rewards };
-      delete rewards[task.id];
-      const removeBonus = record.fullBonus;
-      return {
-        ...current,
-        pet: {
-          ...current.pet,
-          coins: Math.max(0, current.pet.coins - reward.coins - (removeBonus ? FULL_BONUS_COINS : 0)),
-          xp: Math.max(0, current.pet.xp - reward.xp),
-          hearts: Math.max(0, current.pet.hearts - (removeBonus ? 1 : 0)),
-        },
-        records: {
-          ...current.records,
-          [todayKey]: { completed, rewards, fullBonus: false, fullComplete: false },
-        },
-        transactions: [
-          ...current.transactions,
-          createTransaction("task-undo", {
-            coinsDelta: -reward.coins,
-            xpDelta: -reward.xp,
-            heartsDelta: 0,
-            note: `取消打卡：${reward.title}`,
-            taskId: task.id,
-          }),
-          ...(removeBonus ? [
-            createTransaction("bonus-reversal", {
-              coinsDelta: -FULL_BONUS_COINS,
-              xpDelta: 0,
-              heartsDelta: -1,
-              note: "取消今日全勤奖励",
-            }),
-          ] : []),
-        ],
-      };
-    });
+    setData((current) => revokeTaskApproval(current, task.id, todayKey).data);
     showToast("已取消这次打卡");
   };
 
@@ -390,6 +389,9 @@ export default function PetApp() {
         hunger: clamp(current.pet.hunger + (action === "feed" ? 12 : 0)),
         happiness: clamp(current.pet.happiness + (action === "play" ? 12 : action === "pet" ? 6 : 2)),
       },
+      care: action === "feed"
+        ? { ...current.care, fedDates: Array.from(new Set([...current.care.fedDates, todayKey])) }
+        : current.care,
     }));
     playTone(data.settings.sound);
     setCelebrating(true);
@@ -426,6 +428,9 @@ export default function PetApp() {
           equippedClothes: pendingBuy.type === "clothes" ? pendingBuy.id : current.pet.equippedClothes,
           equippedDecor: pendingBuy.type === "decor" ? pendingBuy.id : current.pet.equippedDecor,
         },
+        care: pendingBuy.type === "food"
+          ? { ...current.care, fedDates: Array.from(new Set([...current.care.fedDates, todayKey])) }
+          : current.care,
         transactions: [
           ...current.transactions,
           createTransaction("purchase", {
@@ -463,17 +468,46 @@ export default function PetApp() {
   };
 
   const openParent = () => {
-    setAnswer("");
+    setPinInput("");
+    setPinConfirm("");
     setParentError("");
-    setParentStage("challenge");
+    setParentStage(data.settings.parentPin ? "challenge" : "setup");
   };
 
-  const checkParentAnswer = () => {
-    if (answer.trim() === "21") {
+  const setCarePenaltyEnabled = (enabled: boolean) => {
+    setData((current) => ({
+      ...current,
+      settings: { ...current.settings, carePenaltyEnabled: enabled },
+      care: enabled && !current.settings.carePenaltyEnabled
+        ? { ...current.care, startedAtDate: todayKey }
+        : current.care,
+    }));
+  };
+
+  const saveParentPin = () => {
+    if (!/^\d{4}$/.test(pinInput)) {
+      setParentError("请输入4位数字");
+      return;
+    }
+    if (pinInput !== pinConfirm) {
+      setParentError("两次输入不一致");
+      return;
+    }
+    setData((current) => ({ ...current, settings: { ...current.settings, parentPin: pinInput } }));
+    setParentStage("open");
+    setParentError("");
+    setPinInput("");
+    setPinConfirm("");
+    showToast("家长密码已设置");
+  };
+
+  const checkParentPin = () => {
+    if (pinInput === data.settings.parentPin) {
       setParentStage("open");
       setParentError("");
+      setPinInput("");
     } else {
-      setParentError("再算一算，答案不对哦");
+      setParentError("家长密码不正确");
     }
   };
 
@@ -502,13 +536,30 @@ export default function PetApp() {
       ...current,
       tasks: [
         ...current.tasks,
-        { id: `custom-${Date.now()}`, title: title.slice(0, 20), icon: "⭐", category: "custom", coins: 10, xp: 5, active: true },
+        {
+          id: `custom-${Date.now()}`,
+          title: title.slice(0, 20),
+          icon: "⭐",
+          category: "custom",
+          coins: 10,
+          xp: 5,
+          active: true,
+          proofPrompt: "写下完成情况，交给家长检查",
+        },
       ],
     }));
     setNewTask("");
   };
 
   const deleteTask = (id: string) => {
+    const hasPending = data.submissions.some((submission) =>
+      submission.taskId === id && submission.status === "pending"
+    );
+    const approvedToday = data.records[todayKey]?.completed.includes(id);
+    if (hasPending || approvedToday) {
+      showToast(hasPending ? "请先处理这项任务的待验收申请" : "请先撤销今天的验收，再删除任务");
+      return;
+    }
     setData((current) => ({
       ...current,
       tasks: current.tasks.filter((task) => task.id !== id),
@@ -634,7 +685,7 @@ export default function PetApp() {
 
       <section className="status-strip" aria-label="宠物状态">
         <button className="mini-pet" onClick={() => setTab("home")} aria-label={`去看看${data.pet.nickname}`}>
-          <span>{pet.emoji}</span>
+          <img src={pet.image} alt="" />
           <strong>{data.pet.nickname}</strong>
         </button>
         <div className="status-chip"><span>⭐</span><strong>{level}级</strong></div>
@@ -668,13 +719,13 @@ export default function PetApp() {
               </div>
               <div className="hero-pet" aria-hidden="true">
                 <span className="sun-ray">☀️</span>
-                <span className="hero-pet-face">{pet.emoji}</span>
+                <img className="hero-pet-face" src={pet.image} alt="" />
               </div>
             </div>
 
             <div className="section-heading">
               <div><span className="section-label">TODAY</span><h2>今天要做这些事</h2></div>
-              <p>每完成一项，就向前走一步</p>
+              <p>提交说明后，由家长验收发奖励</p>
             </div>
 
             {activeTasks.length === 0 ? (
@@ -683,20 +734,27 @@ export default function PetApp() {
               <div className="task-grid">
                 {activeTasks.map((task) => {
                   const done = todayRecord.completed.includes(task.id);
+                  const pending = todayPending.find((submission) => submission.taskId === task.id);
                   return (
-                    <article className={`task-card ${done ? "done" : ""}`} key={task.id}>
+                    <article className={`task-card ${done ? "done" : pending ? "pending" : ""}`} key={task.id}>
                       <div className="task-icon" aria-hidden="true">{task.icon}</div>
                       <div className="task-copy">
                         <h3>{task.title}</h3>
                         <p><span>🪙 +{task.coins}</span><span>⭐ +{task.xp}</span></p>
+                        <small>{task.proofPrompt}</small>
                       </div>
                       {done ? (
-                        <button className="done-button" onClick={() => undoTask(task)} aria-label={`${task.title}已完成，点击取消`}>
-                          <span>✓</span> 完成啦
-                          <small>点此取消</small>
+                        <div className="done-button" aria-label={`${task.title}已经家长验收`}>
+                          <span>✓</span> 已验收
+                          <small>奖励已发放</small>
+                        </div>
+                      ) : pending ? (
+                        <button className="pending-button" onClick={() => cancelSubmission(pending.id)} aria-label={`撤回${task.title}的验收申请`}>
+                          <span>⏳</span> 待验收
+                          <small>点此撤回</small>
                         </button>
                       ) : (
-                        <button className="complete-button" onClick={() => completeTask(task)}>完成</button>
+                        <button className="complete-button" onClick={() => openSubmission(task)}>申请验收</button>
                       )}
                     </article>
                   );
@@ -719,10 +777,12 @@ export default function PetApp() {
               {equippedDecor && <div className="equipped-decor" aria-label={equippedDecor.name}>{equippedDecor.icon}</div>}
               <button className="big-pet" onClick={() => petAction("pet")} aria-label={`摸摸${data.pet.nickname}`}>
                 {equippedClothes && <span className="pet-clothes">{equippedClothes.icon}</span>}
-                <span className="pet-emoji">{pet.emoji}</span>
+                <img className="pet-emoji" src={pet.image} alt={pet.label} />
                 <span className="pet-shadow" />
               </button>
-              <div className="speech-bubble">小主人，今天想一起做什么？</div>
+              <div className={`speech-bubble ${fedToday ? "fed" : "hungry"}`}>
+                {fedToday ? "今天吃过啦，谢谢小主人！" : "今天还没喂我，别忘记哦！"}
+              </div>
               <div className="room-rug" />
             </div>
 
@@ -738,7 +798,7 @@ export default function PetApp() {
             </div>
 
             <div className="action-grid">
-              <button onClick={() => petAction("feed")}><span>🍎</span><strong>喂食</strong><small>填饱小肚子</small></button>
+              <button className={fedToday ? "care-done" : "care-needed"} onClick={() => petAction("feed")}><span>{fedToday ? "✅" : "🍎"}</span><strong>{fedToday ? "今日已喂" : "喂食"}</strong><small>{fedToday ? "再喂也可以" : `漏喂将扣 ${data.settings.missedFeedCoins} 金币`}</small></button>
               <button onClick={() => petAction("bath")}><span>🛁</span><strong>洗澡</strong><small>变得香喷喷</small></button>
               <button onClick={() => petAction("play")}><span>🪀</span><strong>玩耍</strong><small>一起开心玩</small></button>
               <button onClick={() => petAction("pet")}><span>🖐️</span><strong>摸摸它</strong><small>给它一个拥抱</small></button>
@@ -849,7 +909,7 @@ export default function PetApp() {
                 {[...data.transactions].reverse().slice(0, 12).map((transaction) => (
                   <article key={transaction.id}>
                     <span className="ledger-icon">
-                      {transaction.kind === "purchase" ? "🛍️" : transaction.coinsDelta < 0 ? "↩️" : "⭐"}
+                      {transaction.kind === "purchase" ? "🛍️" : transaction.kind === "care-penalty" ? "🍂" : transaction.coinsDelta < 0 ? "↩️" : "⭐"}
                     </span>
                     <div><strong>{transaction.note}</strong><small>{transaction.date}</small></div>
                     <p className={transaction.coinsDelta < 0 ? "negative" : "positive"}>
@@ -873,18 +933,56 @@ export default function PetApp() {
 
       {!data.pet.chosen && <PetPicker onChoose={choosePet} />}
 
+      {submissionTask && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="submission-title">
+          <div className="modal-card submission-card">
+            <button className="modal-close" onClick={() => setSubmissionTask(null)} aria-label="关闭">×</button>
+            <span className="modal-icon">{submissionTask.icon}</span>
+            <p className="eyebrow">ASK FOR CHECK</p>
+            <h2 id="submission-title">申请家长验收</h2>
+            <p><strong>{submissionTask.title}</strong></p>
+            <label className="proof-field">
+              {submissionTask.proofPrompt}
+              <textarea
+                value={proofNote}
+                onChange={(event) => setProofNote(event.target.value.slice(0, 120))}
+                placeholder="例如：读了《昆虫记》第12—28页"
+                aria-label="完成情况说明"
+              />
+            </label>
+            <p className="reward-hold">家长点“通过”后，才会发放 🪙 {submissionTask.coins} 和 ⭐ {submissionTask.xp}</p>
+            <button className="primary-wide" onClick={submitTask}>提交给家长</button>
+          </div>
+        </div>
+      )}
+
+      {parentStage === "setup" && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="parent-setup-title">
+          <div className="modal-card challenge-card">
+            <button className="modal-close" onClick={() => setParentStage("closed")} aria-label="关闭">×</button>
+            <span className="modal-icon">🔐</span>
+            <h2 id="parent-setup-title">设置家长密码</h2>
+            <p>设置4位数字。以后只有家长能验收任务、修改奖励和惩罚规则。</p>
+            <input type="password" autoComplete="new-password" value={pinInput} onChange={(event) => setPinInput(event.target.value.replace(/\D/g, "").slice(0, 4))} inputMode="numeric" pattern="[0-9]*" aria-label="设置4位家长密码" placeholder="输入4位数字" />
+            <input type="password" autoComplete="new-password" value={pinConfirm} onChange={(event) => setPinConfirm(event.target.value.replace(/\D/g, "").slice(0, 4))} inputMode="numeric" pattern="[0-9]*" aria-label="再次输入家长密码" placeholder="再次输入" onKeyDown={(event) => event.key === "Enter" && saveParentPin()} />
+            {parentError && <p className="form-error">{parentError}</p>}
+            <button className="primary-wide" onClick={saveParentPin}>保存并进入</button>
+            <small>密码只保存在这台设备，用于防止孩子自行验收。</small>
+          </div>
+        </div>
+      )}
+
       {parentStage === "challenge" && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="parent-title">
           <div className="modal-card challenge-card">
             <button className="modal-close" onClick={() => setParentStage("closed")} aria-label="关闭">×</button>
             <span className="modal-icon">🔐</span>
             <h2 id="parent-title">家长验证</h2>
-            <p>为了避免小朋友误操作，请回答：</p>
-            <strong className="math-question">12 ＋ 9 ＝ ？</strong>
-            <input value={answer} onChange={(event) => setAnswer(event.target.value)} inputMode="numeric" pattern="[0-9]*" aria-label="算术题答案" onKeyDown={(event) => event.key === "Enter" && checkParentAnswer()} />
+            <p>请输入家长设置的4位密码。</p>
+            <input type="password" autoComplete="current-password" value={pinInput} onChange={(event) => setPinInput(event.target.value.replace(/\D/g, "").slice(0, 4))} inputMode="numeric" pattern="[0-9]*" aria-label="家长密码" onKeyDown={(event) => event.key === "Enter" && checkParentPin()} />
             {parentError && <p className="form-error">{parentError}</p>}
-            <button className="primary-wide" onClick={checkParentAnswer}>进入家长设置</button>
-            <small>这只是防误触，不是真正的安全认证。</small>
+            <button className="primary-wide" onClick={checkParentPin}>进入家长设置</button>
+            <small>这能防止孩子自行发奖励，但不是联网账户认证。</small>
           </div>
         </div>
       )}
@@ -894,9 +992,67 @@ export default function PetApp() {
           <div className="parent-panel">
             <header><div><span className="section-label">FOR PARENTS</span><h2 id="settings-title">家长设置</h2></div><button className="modal-close" onClick={() => setParentStage("closed")} aria-label="关闭">×</button></header>
 
+            <section className="settings-section review-section">
+              <div className="review-heading">
+                <div><h3>待家长验收</h3><p className="settings-help">孩子提交说明不会立即得到奖励，必须由您检查后确认。</p></div>
+                <span>{pendingSubmissions.length}</span>
+              </div>
+              {pendingSubmissions.length === 0 ? (
+                <div className="review-empty">暂时没有待验收任务</div>
+              ) : (
+                <div className="review-list">
+                  {pendingSubmissions.map((submission) => (
+                    <article key={submission.id}>
+                      <div>
+                        <strong>{submission.taskTitle}</strong>
+                        <small>{submission.date} · 孩子说明</small>
+                        <p>{submission.proofNote}</p>
+                      </div>
+                      <div className="review-actions">
+                        <button className="reject-review" onClick={() => rejectSubmission(submission.id)}>退回</button>
+                        <button className="approve-review" onClick={() => approveSubmission(submission.id)}>检查后通过</button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+              {todayRecord.completed.length > 0 && (
+                <details className="approved-details">
+                  <summary>查看今天已验收任务</summary>
+                  {data.tasks.filter((task) => todayRecord.completed.includes(task.id)).map((task) => (
+                    <div key={task.id}><span>✓ {task.title}</span><button onClick={() => undoTask(task)}>撤销验收</button></div>
+                  ))}
+                </details>
+              )}
+            </section>
+
+            <section className="settings-section pet-care-settings">
+              <div>
+                <h3>宠物和照料规则</h3>
+                <p className="settings-help">可以直接换成小蛇，不会影响已有金币、打卡和兑换记录。</p>
+                <div className="parent-pet-picker">
+                  {petTypes.map((petType) => {
+                    const option = petFace(petType);
+                    return (
+                      <button className={data.pet.type === petType ? "selected" : ""} key={petType} onClick={() => setData((current) => ({ ...current, pet: { ...current.pet, type: petType } }))}>
+                        <img src={option.image} alt="" /><span>{option.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="penalty-controls">
+                <label className="switch-row"><span>🍎 启用漏喂惩罚</span><input type="checkbox" checked={data.settings.carePenaltyEnabled} onChange={(event) => setCarePenaltyEnabled(event.target.checked)} /></label>
+                <label className="penalty-number">每漏喂一天扣金币
+                  <input type="number" min="0" max="20" value={data.settings.missedFeedCoins} onChange={(event) => setData((current) => ({ ...current, settings: { ...current.settings, missedFeedCoins: Math.max(0, Math.min(20, Number(event.target.value) || 0)) } }))} />
+                </label>
+                <p>漏喂还会让饱食度降低15、开心值降低8；金币不会扣成负数，宠物不会死亡。每天只计算一次，关闭期间不会补扣。</p>
+              </div>
+            </section>
+
             <section className="settings-section">
               <h3>每日任务</h3>
-              <p className="settings-help">可以修改名称、奖励和顺序。历史记录不会被改变。</p>
+              <p className="settings-help">可以修改任务、验收提示、奖励和顺序。历史记录不会被改变。</p>
               <div className="task-editor">
                 {data.tasks.map((task, index) => (
                   <div className="task-edit-row" key={task.id}>
@@ -909,6 +1065,9 @@ export default function PetApp() {
                       <button onClick={() => moveTask(task.id, 1)} disabled={index === data.tasks.length - 1} aria-label="下移">↓</button>
                       <button onClick={() => deleteTask(task.id)} aria-label={`删除${task.title}`}>🗑️</button>
                     </div>
+                    <label className="proof-prompt-input">验收时让孩子说明
+                      <input value={task.proofPrompt} onChange={(event) => updateTask(task.id, { proofPrompt: event.target.value.slice(0, 60) })} aria-label={`${task.title}验收提示`} />
+                    </label>
                   </div>
                 ))}
               </div>
@@ -923,6 +1082,11 @@ export default function PetApp() {
                 <h3>使用偏好</h3>
                 <label className="switch-row"><span>🔊 音效</span><input type="checkbox" checked={data.settings.sound} onChange={(event) => setData((current) => ({ ...current, settings: { ...current.settings, sound: event.target.checked } }))} /></label>
                 <label className="switch-row"><span>✨ 动画</span><input type="checkbox" checked={data.settings.animations} onChange={(event) => setData((current) => ({ ...current, settings: { ...current.settings, animations: event.target.checked } }))} /></label>
+                <button className="soft-button" onClick={() => {
+                  setPinInput("");
+                  setPinConfirm("");
+                  setParentStage("setup");
+                }}>🔐 重设家长密码</button>
                 <button className="soft-button" onClick={() => setInstallHelp(true)}>📲 iPad安装方法</button>
               </div>
               <div>
@@ -996,19 +1160,19 @@ export default function PetApp() {
 }
 
 function PetPicker({ onChoose }: { onChoose: (type: PetType, nickname: string) => void }) {
-  const [type, setType] = useState<PetType>("dog");
-  const [name, setName] = useState("小布丁");
+  const [type, setType] = useState<PetType>("snake");
+  const [name, setName] = useState("小青");
   return (
     <div className="modal-backdrop welcome-backdrop" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
       <div className="welcome-card">
         <span className="welcome-sun">☀️</span>
         <p className="eyebrow">WELCOME, LITTLE EXPLORER</p>
         <h2 id="welcome-title">选一个暑假小伙伴</h2>
-        <p>每天完成一点小任务，陪它一起快乐长大！</p>
+        <p>全新冒险小队到齐了，小蛇也在等你！</p>
         <div className="pet-options">
-          {(["dog", "cat", "dino"] as const).map((petType) => {
+          {petTypes.map((petType) => {
             const pet = petFace(petType);
-            return <button key={petType} className={type === petType ? "selected" : ""} onClick={() => setType(petType)}><span>{pet.emoji}</span><strong>{pet.label}</strong><i>{type === petType ? "✓" : ""}</i></button>;
+            return <button key={petType} className={type === petType ? "selected" : ""} onClick={() => setType(petType)}><img src={pet.image} alt="" /><strong>{pet.label}</strong><i>{type === petType ? "✓" : ""}</i></button>;
           })}
         </div>
         <label className="name-field">给它取个名字<input value={name} onChange={(event) => setName(event.target.value.slice(0, 8))} placeholder="最多8个字" /></label>

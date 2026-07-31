@@ -1,4 +1,4 @@
-export type PetType = "dog" | "cat" | "dino";
+export type PetType = "dog" | "cat" | "snake" | "dino";
 export type TaskCategory = "reading" | "writing" | "sport" | "homework" | "tidy" | "help" | "sleep" | "custom";
 
 export type Task = {
@@ -9,6 +9,7 @@ export type Task = {
   coins: number;
   xp: number;
   active: boolean;
+  proofPrompt: string;
 };
 
 export type RewardSnapshot = {
@@ -23,6 +24,18 @@ export type DailyRecord = {
   rewards: Record<string, RewardSnapshot>;
   fullBonus: boolean;
   fullComplete: boolean;
+};
+
+export type TaskSubmission = {
+  id: string;
+  taskId: string;
+  taskTitle: string;
+  date: string;
+  proofNote: string;
+  submittedAt: string;
+  activeTaskIds: string[];
+  status: "pending" | "approved" | "rejected";
+  reviewedAt?: string;
 };
 
 export type PetState = {
@@ -46,6 +59,7 @@ export type TransactionKind =
   | "task-undo"
   | "bonus-reversal"
   | "purchase"
+  | "care-penalty"
   | "legacy-balance-adjustment";
 
 export type GameTransaction = {
@@ -63,15 +77,24 @@ export type GameTransaction = {
 };
 
 export type GameData = {
-  version: 2;
+  version: 3;
   pet: PetState;
   tasks: Task[];
   records: Record<string, DailyRecord>;
   badges: string[];
   transactions: GameTransaction[];
+  submissions: TaskSubmission[];
+  care: {
+    startedAtDate: string;
+    fedDates: string[];
+    penaltyDates: string[];
+  };
   settings: {
     sound: boolean;
     animations: boolean;
+    parentPin: string | null;
+    carePenaltyEnabled: boolean;
+    missedFeedCoins: number;
   };
   meta: {
     createdAt: string;
@@ -83,12 +106,22 @@ export type GameData = {
   };
 };
 
-type LegacyGameDataV1 = Omit<GameData, "version" | "transactions" | "meta"> & {
+type LegacyTaskV2 = Omit<Task, "proofPrompt"> & { proofPrompt?: string };
+type LegacyGameDataV2 = Omit<GameData, "version" | "tasks" | "submissions" | "care" | "settings"> & {
+  version: 2;
+  tasks: LegacyTaskV2[];
+  settings: {
+    sound: boolean;
+    animations: boolean;
+  };
+};
+
+type LegacyGameDataV1 = Omit<LegacyGameDataV2, "version" | "transactions" | "meta"> & {
   version: 1;
 };
 
-export const APP_VERSION = "0.2.0";
-export const CURRENT_SCHEMA_VERSION = 2;
+export const APP_VERSION = "0.3.0";
+export const CURRENT_SCHEMA_VERSION = 3;
 export const FULL_BONUS_COINS = 20;
 export const PRIMARY_STORAGE_KEY = "summer-pet-data";
 export const LEGACY_STORAGE_KEYS = ["summer-pet-v1"];
@@ -107,13 +140,35 @@ const permanentItemInfo: Record<string, { name: string; price: number }> = {
   tent: { name: "星空帐篷", price: 65 },
 };
 
+const proofPromptByTaskId: Record<string, string> = {
+  read: "写下今天读的书名和页码",
+  write: "写下练习内容，把练字本交给家长",
+  sport: "写下运动项目和大约时长",
+  homework: "写下完成了哪一页或哪几题",
+  tidy: "写下整理了什么，请家长现场查看",
+  help: "写下帮家里做了什么",
+  sleep: "睡前请家长当面验收",
+};
+
+function proofPromptForTask(task: LegacyTaskV2 | Task) {
+  return typeof task.proofPrompt === "string" && task.proofPrompt.trim()
+    ? task.proofPrompt
+    : proofPromptByTaskId[task.id] ?? "写下完成情况，交给家长检查";
+}
+
 export class DataSafetyError extends Error {
   rawData?: string;
+  reason: "invalid-data" | "future-schema";
 
-  constructor(message: string, rawData?: string) {
+  constructor(
+    message: string,
+    rawData?: string,
+    reason: "invalid-data" | "future-schema" = "invalid-data",
+  ) {
     super(message);
     this.name = "DataSafetyError";
     this.rawData = rawData;
+    this.reason = reason;
   }
 }
 
@@ -140,6 +195,27 @@ function dateFromIso(value: string) {
   return value.slice(0, 10);
 }
 
+function localDateFromDate(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function nextDateKey(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
+function shiftDateKey(value: string, days: number) {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
 let transactionSequence = 0;
 
 export function createTransaction(
@@ -162,7 +238,7 @@ export function createTransaction(
 export function createInitialGameData(tasks: Task[]): GameData {
   const createdAt = nowIso();
   return {
-    version: 2,
+    version: 3,
     pet: {
       chosen: false,
       type: "dog",
@@ -187,7 +263,19 @@ export function createInitialGameData(tasks: Task[]): GameData {
         note: "初始成长资金",
       }, createdAt),
     ],
-    settings: { sound: true, animations: true },
+    submissions: [],
+    care: {
+      startedAtDate: localDateFromDate(new Date()),
+      fedDates: [],
+      penaltyDates: [],
+    },
+    settings: {
+      sound: true,
+      animations: true,
+      parentPin: null,
+      carePenaltyEnabled: true,
+      missedFeedCoins: 3,
+    },
     meta: {
       createdAt,
       updatedAt: createdAt,
@@ -222,7 +310,7 @@ function validateCore(value: unknown) {
     isObject(value.settings);
 }
 
-function migrateV1(value: LegacyGameDataV1): GameData {
+function migrateV1(value: LegacyGameDataV1): LegacyGameDataV2 {
   const migratedAt = nowIso();
   const transactions: GameTransaction[] = [
     createTransaction("opening-balance", {
@@ -326,19 +414,96 @@ function migrateV1(value: LegacyGameDataV1): GameData {
   };
 }
 
-function normalizeV2(value: GameData): GameData {
+function migrateV2(value: LegacyGameDataV2): GameData {
   if (!Array.isArray(value.transactions) || !isObject(value.meta)) {
     throw new DataSafetyError("数据版本标记为 v2，但缺少升级所需的流水或元数据。", JSON.stringify(value));
+  }
+  const migratedAt = nowIso();
+  const submissions: TaskSubmission[] = [];
+  for (const [date, record] of Object.entries(value.records)) {
+    for (const taskId of record.completed) {
+      const reward = record.rewards[taskId];
+      submissions.push({
+        id: `legacy-approved:${date}:${taskId}`,
+        taskId,
+        taskTitle: reward?.title ?? taskId,
+        date,
+        proofNote: "旧版本已完成记录",
+        submittedAt: `${date}T12:00:00.000Z`,
+        activeTaskIds: [...record.completed],
+        status: "approved",
+        reviewedAt: `${date}T12:00:00.000Z`,
+      });
+    }
+  }
+  return {
+    ...value,
+    version: 3,
+    pet: { ...value.pet, owned: [...value.pet.owned] },
+    tasks: value.tasks.map((task) => ({
+      ...task,
+      proofPrompt: proofPromptForTask(task),
+    })),
+    records: structuredClone(value.records),
+    badges: [...value.badges],
+    transactions: value.transactions.map((transaction) => ({ ...transaction })),
+    submissions,
+    care: {
+      startedAtDate: localDateFromDate(new Date()),
+      fedDates: [],
+      penaltyDates: [],
+    },
+    settings: {
+      ...value.settings,
+      parentPin: null,
+      carePenaltyEnabled: true,
+      missedFeedCoins: 3,
+    },
+    meta: {
+      ...value.meta,
+      appVersion: APP_VERSION,
+      updatedAt: migratedAt,
+      lastMigratedAt: migratedAt,
+      taskTombstones: Array.isArray(value.meta.taskTombstones) ? [...value.meta.taskTombstones] : [],
+    },
+  };
+}
+
+function normalizeV3(value: GameData): GameData {
+  if (!Array.isArray(value.transactions) || !Array.isArray(value.submissions) || !isObject(value.meta) || !isObject(value.care)) {
+    throw new DataSafetyError("数据版本标记为 v3，但缺少验收、照料或迁移元数据。", JSON.stringify(value));
   }
   const updatedAt = nowIso();
   return {
     ...value,
     pet: { ...value.pet, owned: [...value.pet.owned] },
-    tasks: value.tasks.map((task) => ({ ...task })),
+    tasks: value.tasks.map((task) => ({
+      ...task,
+      proofPrompt: proofPromptForTask(task),
+    })),
     records: structuredClone(value.records),
     badges: [...value.badges],
     transactions: value.transactions.map((transaction) => ({ ...transaction })),
-    settings: { ...value.settings },
+    submissions: value.submissions.map((submission) => ({
+      ...submission,
+      activeTaskIds: Array.isArray(submission.activeTaskIds)
+        ? [...submission.activeTaskIds]
+        : value.tasks.filter((task) => task.active).map((task) => task.id),
+    })),
+    care: {
+      startedAtDate: typeof value.care.startedAtDate === "string" ? value.care.startedAtDate : localDateFromDate(new Date()),
+      fedDates: Array.isArray(value.care.fedDates) ? [...value.care.fedDates] : [],
+      penaltyDates: Array.isArray(value.care.penaltyDates) ? [...value.care.penaltyDates] : [],
+    },
+    settings: {
+      sound: Boolean(value.settings.sound),
+      animations: Boolean(value.settings.animations),
+      parentPin: typeof value.settings.parentPin === "string" ? value.settings.parentPin : null,
+      carePenaltyEnabled: value.settings.carePenaltyEnabled !== false,
+      missedFeedCoins: Number.isFinite(value.settings.missedFeedCoins)
+        ? Math.max(0, Math.min(20, Math.round(value.settings.missedFeedCoins)))
+        : 3,
+    },
     meta: {
       ...value.meta,
       appVersion: APP_VERSION,
@@ -349,16 +514,225 @@ function normalizeV2(value: GameData): GameData {
 }
 
 export function migrateGameData(value: unknown): { data: GameData; migratedFrom: number | null } {
+  const version = schemaVersionOf(value);
+  if (version && version > CURRENT_SCHEMA_VERSION) {
+    throw new DataSafetyError(
+      "这份数据来自更高版本，请先升级应用后再打开。",
+      safeStringify(value),
+      "future-schema",
+    );
+  }
   if (!validateCore(value)) {
     throw new DataSafetyError("数据结构不完整，已停止写入以保护原记录。", safeStringify(value));
   }
-  const version = schemaVersionOf(value);
-  if (version === 1) return { data: migrateV1(value as LegacyGameDataV1), migratedFrom: 1 };
-  if (version === 2) return { data: normalizeV2(value as GameData), migratedFrom: null };
-  if (version && version > CURRENT_SCHEMA_VERSION) {
-    throw new DataSafetyError("这份数据来自更高版本，请先升级应用后再打开。", safeStringify(value));
-  }
+  if (version === 1) return { data: migrateV2(migrateV1(value as LegacyGameDataV1)), migratedFrom: 1 };
+  if (version === 2) return { data: migrateV2(value as LegacyGameDataV2), migratedFrom: 2 };
+  if (version === 3) return { data: normalizeV3(value as GameData), migratedFrom: null };
   throw new DataSafetyError("无法识别这份数据的版本，原数据没有被修改。", safeStringify(value));
+}
+
+export function applyMissedFeedPenalties(data: GameData, today: string) {
+  if (!data.settings.carePenaltyEnabled || data.care.startedAtDate >= today) {
+    return { data, appliedDates: [] as string[] };
+  }
+
+  const fedDates = new Set(data.care.fedDates);
+  const penaltyDates = new Set(data.care.penaltyDates);
+  const appliedDates: string[] = [];
+  const transactions = [...data.transactions];
+  let coins = data.pet.coins;
+  let hunger = data.pet.hunger;
+  let happiness = data.pet.happiness;
+  const earliestDate = shiftDateKey(today, -120);
+  let cursor = data.care.startedAtDate < earliestDate ? earliestDate : data.care.startedAtDate;
+  let inspected = 0;
+
+  while (cursor < today && inspected < 120) {
+    if (!fedDates.has(cursor) && !penaltyDates.has(cursor)) {
+      const coinLoss = Math.min(coins, data.settings.missedFeedCoins);
+      coins -= coinLoss;
+      hunger = Math.max(0, hunger - 15);
+      happiness = Math.max(0, happiness - 8);
+      penaltyDates.add(cursor);
+      appliedDates.push(cursor);
+      transactions.push({
+        id: `care-penalty:${cursor}`,
+        at: `${cursor}T23:59:00.000Z`,
+        date: cursor,
+        kind: "care-penalty",
+        coinsDelta: -coinLoss,
+        xpDelta: 0,
+        heartsDelta: 0,
+        note: coinLoss > 0 ? `漏喂惩罚：扣除 ${coinLoss} 枚金币` : "漏喂记录：金币已为 0",
+      });
+    }
+    cursor = nextDateKey(cursor);
+    inspected += 1;
+  }
+
+  if (appliedDates.length === 0) return { data, appliedDates };
+  return {
+    data: {
+      ...data,
+      pet: { ...data.pet, coins, hunger, happiness },
+      transactions,
+      care: { ...data.care, penaltyDates: [...penaltyDates] },
+    },
+    appliedDates,
+  };
+}
+
+export function submitTaskForApproval(
+  data: GameData,
+  taskId: string,
+  date: string,
+  proofNote: string,
+  submittedAt = nowIso(),
+) {
+  const task = data.tasks.find((item) => item.id === taskId);
+  const duplicate = data.submissions.some((submission) =>
+    submission.date === date && submission.taskId === taskId && submission.status === "pending"
+  );
+  if (!task || duplicate || data.records[date]?.completed.includes(taskId)) {
+    return { data, submitted: false };
+  }
+  const submission: TaskSubmission = {
+    id: `submission:${date}:${taskId}:${submittedAt}`,
+    taskId,
+    taskTitle: task.title,
+    date,
+    proofNote: proofNote.trim(),
+    submittedAt,
+    activeTaskIds: data.tasks.filter((item) => item.active).map((item) => item.id),
+    status: "pending",
+  };
+  return { data: { ...data, submissions: [...data.submissions, submission] }, submitted: true };
+}
+
+export function approveTaskSubmission(
+  data: GameData,
+  submissionId: string,
+  reviewedAt = nowIso(),
+) {
+  const submission = data.submissions.find((item) => item.id === submissionId && item.status === "pending");
+  if (!submission) return { data, approved: false };
+  const task = data.tasks.find((item) => item.id === submission.taskId);
+  if (!task) return { data, approved: false };
+  const record = data.records[submission.date] ?? { completed: [], rewards: {}, fullBonus: false, fullComplete: false };
+  if (record.completed.includes(task.id)) return { data, approved: false };
+
+  const completed = [...record.completed, task.id];
+  const activeTaskIds = submission.activeTaskIds;
+  const isFull = activeTaskIds.length > 0 && activeTaskIds.every((taskId) => completed.includes(taskId));
+  const grantBonus = isFull && !record.fullBonus;
+  const next: GameData = {
+    ...data,
+    pet: {
+      ...data.pet,
+      coins: data.pet.coins + task.coins + (grantBonus ? FULL_BONUS_COINS : 0),
+      xp: data.pet.xp + task.xp,
+      hearts: data.pet.hearts + (grantBonus ? 1 : 0),
+    },
+    records: {
+      ...data.records,
+      [submission.date]: {
+        completed,
+        rewards: {
+          ...record.rewards,
+          [task.id]: { title: task.title, category: task.category, coins: task.coins, xp: task.xp },
+        },
+        fullBonus: record.fullBonus || grantBonus,
+        fullComplete: isFull,
+      },
+    },
+    submissions: data.submissions.map((item) =>
+      item.id === submissionId ? { ...item, status: "approved" as const, reviewedAt } : item
+    ),
+    transactions: [
+      ...data.transactions,
+      createTransaction("task-reward", {
+        coinsDelta: task.coins,
+        xpDelta: task.xp,
+        heartsDelta: 0,
+        note: `完成：${task.title}`,
+        taskId: task.id,
+      }, reviewedAt),
+      ...(grantBonus ? [
+        createTransaction("full-bonus", {
+          coinsDelta: FULL_BONUS_COINS,
+          xpDelta: 0,
+          heartsDelta: 1,
+          note: "今日全勤奖励",
+        }, reviewedAt),
+      ] : []),
+    ],
+  };
+  return { data: next, approved: true };
+}
+
+export function revokeTaskApproval(
+  data: GameData,
+  taskId: string,
+  date: string,
+  reviewedAt = nowIso(),
+) {
+  const record = data.records[date];
+  const reward = record?.rewards[taskId];
+  if (!record || !reward || !record.completed.includes(taskId)) {
+    return { data, revoked: false };
+  }
+
+  const removeBonus = record.fullBonus;
+  const taskCoinsReversed = Math.min(data.pet.coins, reward.coins);
+  const coinsAfterTask = data.pet.coins - taskCoinsReversed;
+  const bonusCoinsReversed = removeBonus ? Math.min(coinsAfterTask, FULL_BONUS_COINS) : 0;
+  const xpReversed = Math.min(data.pet.xp, reward.xp);
+  const heartsReversed = removeBonus ? Math.min(data.pet.hearts, 1) : 0;
+  const completed = record.completed.filter((id) => id !== taskId);
+  const rewards = { ...record.rewards };
+  delete rewards[taskId];
+
+  const next: GameData = {
+    ...data,
+    pet: {
+      ...data.pet,
+      coins: data.pet.coins - taskCoinsReversed - bonusCoinsReversed,
+      xp: data.pet.xp - xpReversed,
+      hearts: data.pet.hearts - heartsReversed,
+    },
+    records: {
+      ...data.records,
+      [date]: { completed, rewards, fullBonus: false, fullComplete: false },
+    },
+    submissions: data.submissions.map((submission) =>
+      submission.date === date && submission.taskId === taskId && submission.status === "approved"
+        ? { ...submission, status: "rejected" as const, reviewedAt }
+        : submission
+    ),
+    transactions: [
+      ...data.transactions,
+      createTransaction("task-undo", {
+        coinsDelta: -taskCoinsReversed,
+        xpDelta: -xpReversed,
+        heartsDelta: 0,
+        note: taskCoinsReversed < reward.coins
+          ? `取消打卡：${reward.title}（可用金币不足，实际收回 ${taskCoinsReversed} 枚）`
+          : `取消打卡：${reward.title}`,
+        taskId,
+      }, reviewedAt),
+      ...(removeBonus ? [
+        createTransaction("bonus-reversal", {
+          coinsDelta: -bonusCoinsReversed,
+          xpDelta: 0,
+          heartsDelta: -heartsReversed,
+          note: bonusCoinsReversed < FULL_BONUS_COINS
+            ? `取消今日全勤奖励（实际收回 ${bonusCoinsReversed} 枚金币）`
+            : "取消今日全勤奖励",
+        }, reviewedAt),
+      ] : []),
+    ],
+  };
+  return { data: next, revoked: true };
 }
 
 function safeStringify(value: unknown) {
@@ -491,6 +865,9 @@ export async function loadGameData(defaultTasks: Task[]): Promise<LoadResult> {
           usedLegacyLocalStorage: false,
         };
       } catch (error) {
+        if (error instanceof DataSafetyError && error.reason === "future-schema") {
+          throw error;
+        }
         const recovered = await recoverFromSnapshots(database);
         if (recovered) {
           await writeCurrentAndSnapshot(database, recovered, current.payload, "corrupt-primary-recovery");

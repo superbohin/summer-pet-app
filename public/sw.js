@@ -1,6 +1,7 @@
-const APP_VERSION = "0.2.0";
+const APP_VERSION = "0.3.0";
 const CACHE_PREFIX = "summer-pet-shell-";
 const CACHE_NAME = `${CACHE_PREFIX}${APP_VERSION}`;
+const BUILD_ASSETS = [];
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",
@@ -8,6 +9,11 @@ const APP_SHELL = [
   "/icon-192.png",
   "/icon-512.png",
   "/apple-touch-icon.png",
+  "/pets/dog-v2.png",
+  "/pets/cat-v2.png",
+  "/pets/snake-v2.png",
+  "/pets/dino-v2.png",
+  ...BUILD_ASSETS,
 ];
 
 self.addEventListener("install", (event) => {

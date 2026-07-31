@@ -25,9 +25,10 @@ test("server-renders the finished Chinese pet app", async () => {
 });
 
 test("includes an installable offline-first manifest and service worker", async () => {
-  const [manifestText, serviceWorker] = await Promise.all([
+  const [manifestText, serviceWorker, builtServiceWorker] = await Promise.all([
     readFile(new URL("../public/manifest.webmanifest", import.meta.url), "utf8"),
     readFile(new URL("../public/sw.js", import.meta.url), "utf8"),
+    readFile(new URL("../dist/client/sw.js", import.meta.url), "utf8"),
   ]);
   const manifest = JSON.parse(manifestText);
   assert.equal(manifest.display, "standalone");
@@ -40,6 +41,10 @@ test("includes an installable offline-first manifest and service worker", async 
   assert.match(serviceWorker, /networkFirst\(event\.request, true\)/);
   assert.match(serviceWorker, /requestUrl\.pathname\.includes\("\/assets\/"\)/);
   assert.match(serviceWorker, /caches\.match\("\/"\)/);
+  assert.match(serviceWorker, /"\/pets\/snake-v2\.png"/);
+  assert.match(serviceWorker, /\.\.\.BUILD_ASSETS/);
+  assert.match(builtServiceWorker, /const BUILD_ASSETS = \["\/assets\/[^"]+\.js"/);
+  assert.match(builtServiceWorker, /"\/assets\/[^"]+\.css"/);
   assert.doesNotMatch(serviceWorker, /indexedDB|localStorage|deleteDatabase/);
 });
 
@@ -48,14 +53,21 @@ test("keeps update, migration and recovery safeguards explicit", async () => {
     readFile(new URL("../app/PetApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/game-data.ts", import.meta.url), "utf8"),
   ]);
-  assert.match(appSource, /record\.completed\.includes\(task\.id\)/);
-  assert.match(appSource, /createTransaction\("task-reward"/);
+  assert.match(dataSource, /record\.completed\.includes\(task\.id\)/);
   assert.match(appSource, /createTransaction\("purchase"/);
+  assert.match(dataSource, /status: "pending"/);
+  assert.match(appSource, /检查后通过/);
+  assert.match(appSource, /type === "snake"/);
+  assert.match(appSource, /visibilitychange/);
+  assert.match(appSource, /setInterval\(reconcileDateAndCare/);
   assert.match(appSource, /snapshotAndReplaceGameData\(imported, "before-manual-import"\)/);
   assert.match(appSource, /createSafetySnapshot\(data, `before-app-update-/);
   assert.match(appSource, /再点一次，才会清空全部记录/);
   assert.match(dataSource, /indexedDB\.open\(DB_NAME, DB_VERSION\)/);
+  assert.match(dataSource, /createTransaction\("task-reward"/);
   assert.match(dataSource, /before-schema-v/);
   assert.match(dataSource, /corrupt-primary-recovery/);
+  assert.match(dataSource, /care-penalty:/);
+  assert.match(dataSource, /error\.reason === "future-schema"/);
   assert.doesNotMatch(dataSource, /indexedDB\.deleteDatabase|localStorage\.clear/);
 });
