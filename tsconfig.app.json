@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "incremental": false,
+    "plugins": []
+  },
+  "include": [
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "lib/**/*.ts",
+    "pages-app/**/*.ts",
+    "pages-app/**/*.tsx"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "pages-dist",
+    "db",
+    "worker"
+  ]
+}

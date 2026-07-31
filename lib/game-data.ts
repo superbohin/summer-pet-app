@@ -1,4 +1,3 @@
-// @ts-expect-error Node's strip-types test runner requires the explicit extension.
 import { avatarCatalog, defaultRealRewards, freeAvatarIds, virtualShopItems, type AvatarId, type RealRewardCatalogItem, type RealRewardCategory } from "./game-catalog.ts";
 
 export type PetType = "dog" | "cat" | "snake" | "dino";
@@ -76,6 +75,11 @@ export type GameTransaction = {
   id: string;
   at: string;
   date: string;
+  /**
+   * Business date affected by a parent review. This differs from `date` when
+   * a parent approves or revokes an older check-in on a later calendar day.
+   */
+  recordDate?: string;
   kind: TransactionKind;
   coinsDelta: number;
   xpDelta: number;
@@ -173,7 +177,7 @@ type LegacyGameDataV3 = {
   meta: GameMeta;
 };
 
-export const APP_VERSION = "0.4.0";
+export const APP_VERSION = "0.5.0";
 export const CURRENT_SCHEMA_VERSION = 4;
 export const FULL_BONUS_COINS = 20;
 export const PRIMARY_STORAGE_KEY = "summer-pet-data";
@@ -889,6 +893,7 @@ export function approveTaskSubmissionsBatch(
           heartsDelta: 0,
           note: `完成：${task.title}`,
           taskId: task.id,
+          recordDate: date,
         }, reviewedAt)
       ),
       ...(grantBonus ? [
@@ -897,6 +902,7 @@ export function approveTaskSubmissionsBatch(
           xpDelta: 0,
           heartsDelta: 1,
           note: "今日全勤奖励",
+          recordDate: date,
         }, reviewedAt),
       ] : []),
     ],
@@ -981,6 +987,7 @@ export function revokeTaskApproval(
           ? `取消打卡：${reward.title}（可用金币不足，实际收回 ${taskCoinsReversed} 枚）`
           : `取消打卡：${reward.title}`,
         taskId,
+        recordDate: date,
       }, reviewedAt),
       ...(removeBonus ? [
         createTransaction("bonus-reversal", {
@@ -990,6 +997,7 @@ export function revokeTaskApproval(
           note: bonusCoinsReversed < FULL_BONUS_COINS
             ? `取消今日全勤奖励（实际收回 ${bonusCoinsReversed} 枚金币）`
             : "取消今日全勤奖励",
+          recordDate: date,
         }, reviewedAt),
       ] : []),
     ],

@@ -1,15 +1,18 @@
-const APP_VERSION = "0.4.0";
-const CACHE_PREFIX = "summer-pet-shell-";
+const APP_VERSION = "0.5.0";
+const SCOPE_URL = new URL(self.registration.scope);
+const SCOPE_KEY = SCOPE_URL.pathname.replace(/[^a-z0-9]+/gi, "-") || "root";
+const CACHE_PREFIX = `summer-pet-shell-${SCOPE_KEY}-`;
 const CACHE_NAME = `${CACHE_PREFIX}${APP_VERSION}`;
 const BUILD_ASSETS = [];
+const scopedUrl = (path = "") => new URL(String(path).replace(/^\/+/, ""), SCOPE_URL).toString();
 const APP_SHELL = [
-  "/",
-  "/manifest.webmanifest",
-  "/version.json",
-  "/icon-192.png",
-  "/icon-512.png",
-  "/apple-touch-icon.png",
-  ...BUILD_ASSETS,
+  scopedUrl("/"),
+  scopedUrl("/manifest.webmanifest"),
+  scopedUrl("/version.json"),
+  scopedUrl("/icon-192.png"),
+  scopedUrl("/icon-512.png"),
+  scopedUrl("/apple-touch-icon.png"),
+  ...BUILD_ASSETS.map(scopedUrl),
 ];
 
 self.addEventListener("install", (event) => {
@@ -53,7 +56,7 @@ async function networkFirst(request, fallbackToRoot = false) {
     const cached = await caches.match(request);
     if (cached) return cached;
     if (fallbackToRoot) {
-      const root = await caches.match("/");
+      const root = await caches.match(scopedUrl("/")) ?? await caches.match("/");
       if (root) return root;
     }
     return new Response("Offline", { status: 503, statusText: "Offline" });
@@ -88,7 +91,10 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (requestUrl.pathname === "/version.json") {
+  if (
+    requestUrl.pathname === new URL("version.json", SCOPE_URL).pathname ||
+    requestUrl.pathname === "/version.json"
+  ) {
     event.respondWith(networkFirst(event.request));
     return;
   }

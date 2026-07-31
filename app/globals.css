@@ -1208,6 +1208,46 @@ p {
   color: var(--muted);
 }
 
+.surface-parent {
+  min-height: 100dvh;
+  padding-bottom: 0;
+  background: #f4f1e8;
+}
+
+.surface-parent .topbar,
+.surface-parent .status-strip,
+.surface-parent > .data-notice,
+.surface-parent > .update-banner {
+  position: relative;
+  z-index: 62;
+}
+
+.surface-parent .parent-backdrop {
+  position: relative;
+  z-index: 60;
+  display: block;
+  min-height: auto;
+  padding: 0 18px max(32px, env(safe-area-inset-bottom));
+  background: transparent;
+}
+
+.surface-parent .parent-panel {
+  width: min(1180px, 100%);
+  max-height: none;
+  margin: 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 32px;
+  box-shadow: var(--shadow);
+}
+
+.surface-parent .parent-panel > header {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  background: rgba(255, 253, 247, 0.96);
+  backdrop-filter: blur(18px);
+}
+
 .bottom-nav button span {
   font-size: 23px;
   filter: grayscale(0.45);

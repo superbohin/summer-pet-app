@@ -15,20 +15,26 @@
 - 成长月历、连续打卡和成长徽章
 - 家长任务管理、数据备份、恢复和打印
 - 版本化数据迁移、收支流水和更新前安全快照
-- 数据保存在当前设备，首次打开后支持离线使用
+- GitHub Pages 孩子端 `#/child` 与家长端 `#/parent`
+- 指定设备密钥授权、私有 GitHub 仓库加密同步和离线事件队列
+- 数据优先保存在当前设备，首次打开后支持离线使用
 
-## 更新和数据如何分开
+## 更新、离线与历史数据
 
-程序和孩子的数据是两层：
+程序、设备本地数据和家庭同步数据分为三层：
 
-- GitHub 保存源代码；发布后的新程序由 Service Worker 联网获取。
+- GitHub Pages 发布界面；Service Worker 联网获取新程序。
 - iPad 上的打卡、金币、经验、兑换和设置保存在当前网址对应的 IndexedDB。
+- 私有家庭数据仓库保存根签名配置和加密、签名、只追加的事件；GitHub Actions 负责验证事件后写入，不需要自建服务器。
 - 新版本第一次读取旧数据时，按数据结构版本顺序迁移；迁移前先保存旧数据快照。
 - 迁移失败时进入“记录保护模式”，不会用空白数据覆盖旧记录。
+- 多设备合并按角色限制字段并按事件 ID 去重；孩子快照不能自行发奖励、伪造验收或覆盖家长规则。
 
 因此，在**始终使用同一个 HTTPS 网址**的前提下，发布新版不会删除历史数据。GitHub 本身不是运行地址：代码推送到 GitHub 后，还需要部署到原来的生产网址，iPad 才能收到新版功能。
 
-> 纯本地数据无法抵御“清除 Safari 网站数据、删除相关网站数据、设备损坏或更换网址”。请每周从家长设置导出 JSON，并保存到 iCloud Drive 或“文件”。如果以后要求多设备自动同步和设备丢失后自动恢复，需要再接入账户和云端数据库。
+> 私有仓库同步是第二份加密历史，但仍建议每周从家长端导出 JSON。清除 Safari 网站数据会删除本机设备私钥，该设备需要重新申请批准。
+
+> 从现有 Sites 地址第一次迁到 GitHub Pages 时，网址来源发生变化，Safari 不能自动读取旧来源的 IndexedDB。必须先在旧站导出 JSON，再在新 GitHub Pages 家长端恢复一次；之后固定使用同一个 Pages 地址，正常版本更新会保留历史。
 
 ## 本地运行
 
@@ -43,30 +49,56 @@ npm run dev
 
 开发调试时，让电脑与 iPad 连接同一 Wi-Fi，并用 `npm run dev -- --host 0.0.0.0` 启动。然后在 iPad Safari 中打开电脑的局域网地址。
 
-正式使用建议部署到 HTTPS 地址。Safari 首次成功打开后，点击“分享”→“添加到主屏幕”。之后可从桌面图标启动，断网时仍能打卡。
+正式使用建议部署到 HTTPS 地址。Safari 首次成功打开后，点击“分享”→“添加到主屏幕”。之后可从桌面图标启动；断网时仍能打卡，联网后再同步。
 
-数据仅保存在当前浏览器中。删除应用或清除 Safari 网站数据前，请在家长设置中导出 JSON 备份。
+## GitHub Pages 与私有家庭仓库
+
+推荐使用两个仓库：
+
+1. 应用仓库：保存本项目并通过 `.github/workflows/pages.yml` 发布 GitHub Pages。页面本身和图片会公开访问。
+2. 家庭数据仓库：必须设为 Private。把以下三个文件按原路径复制进去：
+   - `.github/workflows/family-sync.yml`
+   - `scripts/github-family-sync-action.mjs`
+   - `lib/github-family-sync.ts`
+
+发布后分别使用：
+
+- 孩子端：`https://<用户名>.github.io/<仓库名>/#/child`
+- 家长端：`https://<用户名>.github.io/<仓库名>/#/parent`
+
+每台 iPad 都先打开自己的角色地址，再“添加到主屏幕”。
+
+在 GitHub Pages 的孩子端或家长端首次配置时，填写私有数据仓库、家庭口令和对应设备的 fine-grained PAT。Token 只存于该浏览器的 IndexedDB，不写入仓库、网址或设备申请 JSON。
+
+- 根家长设备：Contents 读写、Actions 读写。
+- 孩子设备：Contents 只读、Actions 读写。
+- 新设备生成 non-extractable P-256 私钥和申请 JSON，由根家长设备批准。
+- 普通网页不能读取 iPad 硬件序列号；“指定设备”实际依赖该设备持有已批准的不可导出私钥。
+
+完整安全边界与配置步骤见 [GitHub 家庭同步说明](docs/GITHUB_SYNC.md)。
 
 ## GitHub 与发布
 
-仓库已包含 GitHub Actions 检查。每次提交或 Pull Request 会执行代码检查、生产构建和数据迁移测试。
+仓库已包含持续集成、Pages 发布和家庭同步三个 GitHub Actions 工作流。
 
 推荐发布步骤：
 
 1. 修改代码；如需改变数据结构，先按 [升级规则](docs/UPGRADING.md) 添加迁移函数和测试。
 2. 在 `package.json` 提升版本号。
-3. 运行 `npm test` 和 `npm run lint`。
-4. 合并到 GitHub 后，将同一份提交部署到**原有生产网址**。
-5. iPad 联网打开应用；出现“新版本已准备好”后点击安全更新。
+3. 运行 `npm test`、`npm run typecheck:app`、`npm run lint` 和 `npm run build:pages`。
+4. 将主分支推送到应用仓库；Pages Workflow 会验证并发布同一提交。
+5. iPad 联网打开原 GitHub Pages 地址；出现“新版本已准备好”后点击安全更新。
 
-当前工程使用 Vinext/Worker 运行形态，不是可直接复制到 GitHub Pages 的纯静态目录。GitHub 适合做源代码和版本管理，正式托管继续使用当前 Sites 地址，或以后配置能运行 Worker 的固定域名。不要在没有导出旧数据的情况下更换域名、子域名或路径站点。
+`npm run build` 继续生成原 Vinext/Sites 版本；`npm run build:pages` 生成 `pages-dist/` 静态 PWA。Pages 构建使用相对根路径，不需要硬编码仓库名。
 
-当前蛋仔角色素材只用于私有仓库和家庭访问站点。《蛋仔派对》角色属于网易的商业 IP；若以后改为公开仓库、公开站点或商业使用，必须先替换为原创的圆润派对风角色素材。
+家庭非商用、非官方产品。《蛋仔派对》及相关角色素材权利归原权利人所有，本应用仅供家庭内部使用。GitHub Pages 上的前端图片属于公开可下载资源。
 
 ## 检查
 
 ```bash
 npm run build
+npm run build:pages
 npm test
+npm run typecheck:app
 npm run lint
 ```

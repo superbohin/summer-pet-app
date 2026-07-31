@@ -36,8 +36,18 @@ import {
   type RealRewardCategory,
   type VirtualShopItem,
 } from "../lib/game-catalog";
+import { appBaseUrl } from "../lib/app-base";
 
 type Tab = "today" | "home" | "shop" | "growth";
+export type PetAppSurface = "combined" | "child" | "parent";
+
+export type PetAppProps = {
+  surface?: PetAppSurface;
+  remoteData?: GameData | null;
+  remoteRevision?: string;
+  onDataChange?: (data: GameData) => void;
+  parentDevicePanel?: React.ReactNode;
+};
 
 const badgeDefinitions = [
   { id: "first", icon: "🌟", name: "第一次打卡", hint: "完成第一个任务" },
@@ -174,7 +184,13 @@ function downloadTextFile(contents: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-export default function PetApp() {
+export default function PetApp({
+  surface = "combined",
+  remoteData = null,
+  remoteRevision = "",
+  onDataChange,
+  parentDevicePanel,
+}: PetAppProps = {}) {
   const [data, setData] = useState<GameData>(() => createInitialGameData(defaultTasks));
   const [hydrated, setHydrated] = useState(false);
   const [storageIssue, setStorageIssue] = useState<DataSafetyError | null>(null);
@@ -185,7 +201,9 @@ export default function PetApp() {
   const [tab, setTab] = useState<Tab>("today");
   const [toast, setToast] = useState("");
   const [celebrating, setCelebrating] = useState(false);
-  const [parentStage, setParentStage] = useState<"closed" | "setup" | "challenge" | "open">("closed");
+  const [parentStage, setParentStage] = useState<"closed" | "setup" | "challenge" | "open">(
+    surface === "parent" ? "open" : "closed",
+  );
   const [pinInput, setPinInput] = useState("");
   const [pinConfirm, setPinConfirm] = useState("");
   const [parentError, setParentError] = useState("");
@@ -208,6 +226,8 @@ export default function PetApp() {
   const [installHelp, setInstallHelp] = useState(false);
   const [todayKey, setTodayKey] = useState(() => localDateKey());
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const appliedRemoteRevision = useRef("");
+  const lastEmittedData = useRef("");
   const activeTasks = data.tasks.filter((task) => task.active);
   const todayRecord = data.records[todayKey] ?? { completed: [], rewards: {}, fullBonus: false, fullComplete: false };
   const completedCount = activeTasks.filter((task) => todayRecord.completed.includes(task.id)).length;
@@ -260,12 +280,12 @@ export default function PetApp() {
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.addEventListener("controllerchange", onControllerChange);
       navigator.serviceWorker.addEventListener("message", onServiceWorkerMessage);
-      navigator.serviceWorker.register("/sw.js").then((registration) => {
+      navigator.serviceWorker.register(appBaseUrl("/sw.js")).then((registration) => {
         if (registration.waiting) setUpdateAvailable(true);
         void registration.update();
       }).catch(() => undefined);
     }
-    fetch("/version.json", { cache: "no-store" })
+    fetch(appBaseUrl("/version.json"), { cache: "no-store" })
       .then((response) => response.ok ? response.json() : null)
       .then((versionInfo: { version?: string } | null) => {
         if (!cancelled && versionInfo?.version && versionInfo.version !== APP_VERSION) {
@@ -284,11 +304,37 @@ export default function PetApp() {
   }, []);
 
   useEffect(() => {
+    if (
+      !hydrated ||
+      !remoteData ||
+      !remoteRevision ||
+      appliedRemoteRevision.current === remoteRevision
+    ) {
+      return;
+    }
+    appliedRemoteRevision.current = remoteRevision;
+    const next = structuredClone(remoteData);
+    lastEmittedData.current = JSON.stringify(next);
+    void snapshotAndReplaceGameData(next, `before-family-sync-${remoteRevision}`)
+      .then(() => setData(next))
+      .catch(() => setSaveIssue("家庭同步记录暂时无法安全写入，本机原记录没有被覆盖。"));
+  }, [hydrated, remoteData, remoteRevision]);
+
+  useEffect(() => {
     if (!hydrated || storageIssue) return;
     queueGameDataSave(data)
-      .then(() => setSaveIssue(""))
+      .then(() => {
+        setSaveIssue("");
+        if (!onDataChange) return;
+        const serialized = JSON.stringify(data);
+        if (serialized === lastEmittedData.current) {
+          lastEmittedData.current = "";
+          return;
+        }
+        onDataChange(structuredClone(data));
+      })
       .catch(() => setSaveIssue("本次记录暂未保存成功，请先不要关闭应用，并导出一份备份。"));
-  }, [data, hydrated, storageIssue]);
+  }, [data, hydrated, onDataChange, storageIssue]);
 
   useEffect(() => {
     if (!hydrated || storageIssue) return;
@@ -798,8 +844,11 @@ export default function PetApp() {
     );
   }
 
+  const childSurface = surface !== "parent";
+  const parentSurface = surface !== "child";
+
   return (
-    <main className={`app-shell ${celebrating && data.settings.animations ? "is-celebrating" : ""}`}>
+    <main className={`app-shell surface-${surface} ${celebrating && data.settings.animations ? "is-celebrating" : ""}`}>
       <div className="sky-decoration sky-one" />
       <div className="sky-decoration sky-two" />
 
@@ -815,17 +864,17 @@ export default function PetApp() {
           <div className="brand-mark" aria-hidden="true">🐾</div>
           <div>
             <p className="eyebrow">我的暑假小伙伴</p>
-            <h1>{tab === "today" ? formatChineseDate() : tab === "home" ? `${data.pet.nickname}的小屋` : tab === "shop" ? "阳光小商店" : "我的成长足迹"}</h1>
+            <h1>{surface === "parent" ? "家长控制台" : tab === "today" ? formatChineseDate() : tab === "home" ? `${data.pet.nickname}的小屋` : tab === "shop" ? "阳光小商店" : "我的成长足迹"}</h1>
           </div>
         </div>
-        <button className="parent-button" onClick={openParent} aria-label="打开家长设置">
+        {surface === "combined" && <button className="parent-button" onClick={openParent} aria-label="打开家长设置">
           ⚙️ <span>家长</span>
-        </button>
+        </button>}
       </header>
 
       <section className="status-strip" aria-label="宠物状态">
         <button className="mini-pet" onClick={() => setTab("home")} aria-label={`去看看${data.pet.nickname}`}>
-          <img src={pet.image} alt="" />
+          <img src={appBaseUrl(pet.image)} alt="" />
           <strong>{data.pet.nickname}</strong>
         </button>
         <div className="status-chip"><span>⭐</span><strong>{level}级</strong></div>
@@ -845,7 +894,7 @@ export default function PetApp() {
         </aside>
       )}
 
-      <div className="page-content">
+      {childSurface && <div className="page-content">
         {tab === "today" && (
           <section className="today-page page-enter">
             <div className="hero-card">
@@ -859,7 +908,7 @@ export default function PetApp() {
               </div>
               <div className="hero-pet" aria-hidden="true">
                 <span className="sun-ray">☀️</span>
-                <img className="hero-pet-face" src={pet.image} alt="" />
+                <img className="hero-pet-face" src={appBaseUrl(pet.image)} alt="" />
               </div>
             </div>
 
@@ -919,7 +968,7 @@ export default function PetApp() {
               {equippedDecor && <div className="equipped-decor" aria-label={equippedDecor.name}>{equippedDecor.icon}</div>}
               <button className="big-pet" onClick={() => petAction("pet")} aria-label={`摸摸${data.pet.nickname}`}>
                 {equippedClothes && <span className="pet-clothes">{equippedClothes.icon}</span>}
-                <img className="pet-emoji" src={pet.image} alt={pet.name} />
+                <img className="pet-emoji" src={appBaseUrl(pet.image)} alt={pet.name} />
                 <span className="pet-shadow" />
               </button>
               <div className={`speech-bubble ${fedToday ? "fed" : "hungry"}`}>
@@ -968,7 +1017,7 @@ export default function PetApp() {
                 <div className="pending-claims-list">
                   {[...data.rewardClaims].reverse().slice(0, 6).map((claim) => (
                     <article key={claim.id}>
-                      <img src={claim.rewardImage} alt="" />
+                      <img src={appBaseUrl(claim.rewardImage)} alt="" />
                       <div><strong>{claim.rewardName}</strong><p>{claim.rewardDescription}</p><small>{claim.price} 金币已预扣</small></div>
                       <span className="claim-status">
                         {claim.status === "pending" ? "⏳ 待兑现" : claim.status === "fulfilled" ? "✅ 已兑现" : "↩️ 已退款"}
@@ -1005,7 +1054,7 @@ export default function PetApp() {
                       const current = data.pet.avatarId === avatar.id;
                       return (
                         <article className={`avatar-card ${current ? "current" : ""}`} key={avatar.id}>
-                          <img className="avatar-art" src={avatar.image} alt={avatar.name} />
+                          <img className="avatar-art" src={appBaseUrl(avatar.image)} alt={avatar.name} />
                           <div>
                             <h4>{avatar.name}</h4>
                             <p>{current ? "现在正在一起冒险" : owned ? "已经加入我的图鉴" : `需要 ${avatar.price} 枚金币解锁`}</p>
@@ -1019,7 +1068,7 @@ export default function PetApp() {
                   </div>
                 </div>
               ))}
-              <p className="family-ip-note">蛋仔角色仅用于私有家庭站点。《蛋仔派对》角色属于网易商业 IP；若公开仓库或站点，请先替换为原创素材。</p>
+              <p className="family-ip-note">家庭非商用、非官方产品。《蛋仔派对》及相关角色素材权利归原权利人所有，本应用仅供家庭内部使用。</p>
             </section>
 
             {(["food", "toy", "clothes", "decor"] as const).map((type) => (
@@ -1034,7 +1083,7 @@ export default function PetApp() {
                     const equipped = item.id === data.pet.equippedClothes || item.id === data.pet.equippedDecor;
                     return (
                       <article className="shop-card" key={item.id}>
-                        <div className="shop-icon"><img className="shop-art" src={item.image} alt="" /></div>
+                        <div className="shop-icon"><img className="shop-art" src={appBaseUrl(item.image)} alt="" /></div>
                         <h3>{item.name}</h3>
                         <p>{item.description}</p>
                         <button onClick={() => buyItem(item)} disabled={!owned && data.pet.coins < item.price}>
@@ -1060,7 +1109,7 @@ export default function PetApp() {
                   const pending = pendingClaims.some((claim) => claim.rewardId === reward.id);
                   return (
                     <article className={`reward-card ${pending ? "pending" : ""}`} key={reward.id}>
-                      <div className="reward-art-wrap"><img className="reward-art" src={reward.image} alt="" /></div>
+                      <div className="reward-art-wrap"><img className="reward-art" src={appBaseUrl(reward.image)} alt="" /></div>
                       <h3>{reward.name}</h3>
                       <span className="reward-price">🪙 {reward.price} · {rewardCategoryLabels[reward.category]}</span>
                       <p>{reward.description}</p>
@@ -1154,18 +1203,18 @@ export default function PetApp() {
             </section>
           </section>
         )}
-      </div>
+      </div>}
 
-      <nav className="bottom-nav" aria-label="主要页面">
+      {childSurface && <nav className="bottom-nav" aria-label="主要页面">
         <button className={tab === "today" ? "active" : ""} onClick={() => setTab("today")}><span>✅</span><strong>今日</strong></button>
         <button className={tab === "home" ? "active" : ""} onClick={() => setTab("home")}><span>🏠</span><strong>小屋</strong></button>
         <button className={tab === "shop" ? "active" : ""} onClick={() => setTab("shop")}><span>🛍️</span><strong>商店</strong></button>
         <button className={tab === "growth" ? "active" : ""} onClick={() => setTab("growth")}><span>🌱</span><strong>成长</strong></button>
-      </nav>
+      </nav>}
 
-      {!data.pet.chosen && <PetPicker onChoose={choosePet} />}
+      {childSurface && !data.pet.chosen && <PetPicker onChoose={choosePet} />}
 
-      {submissionTask && (
+      {childSurface && submissionTask && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="submission-title">
           <div className="modal-card submission-card">
             <button className="modal-close" onClick={() => setSubmissionTask(null)} aria-label="关闭">×</button>
@@ -1188,7 +1237,7 @@ export default function PetApp() {
         </div>
       )}
 
-      {parentStage === "setup" && (
+      {parentSurface && parentStage === "setup" && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="parent-setup-title">
           <div className="modal-card challenge-card">
             <button className="modal-close" onClick={() => setParentStage("closed")} aria-label="关闭">×</button>
@@ -1204,7 +1253,7 @@ export default function PetApp() {
         </div>
       )}
 
-      {parentStage === "challenge" && (
+      {parentSurface && parentStage === "challenge" && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="parent-title">
           <div className="modal-card challenge-card">
             <button className="modal-close" onClick={() => setParentStage("closed")} aria-label="关闭">×</button>
@@ -1219,10 +1268,12 @@ export default function PetApp() {
         </div>
       )}
 
-      {parentStage === "open" && (
+      {parentSurface && parentStage === "open" && (
         <div className="modal-backdrop parent-backdrop" role="dialog" aria-modal="true" aria-labelledby="settings-title">
           <div className="parent-panel">
-            <header><div><span className="section-label">FOR PARENTS</span><h2 id="settings-title">家长设置</h2></div><button className="modal-close" onClick={() => setParentStage("closed")} aria-label="关闭">×</button></header>
+            <header><div><span className="section-label">FOR PARENTS</span><h2 id="settings-title">家长设置</h2></div>{surface === "combined" && <button className="modal-close" onClick={() => setParentStage("closed")} aria-label="关闭">×</button>}</header>
+
+            {parentDevicePanel}
 
             <section className="settings-section review-section">
               <div className="review-heading">
@@ -1304,7 +1355,7 @@ export default function PetApp() {
                     setParentStage("closed");
                     setTab("shop");
                   }}>
-                    <img src={pet.image} alt="" /><span>{pet.name} · 打开图鉴</span>
+                    <img src={appBaseUrl(pet.image)} alt="" /><span>{pet.name} · 打开图鉴</span>
                   </button>
                 </div>
               </div>
@@ -1328,7 +1379,7 @@ export default function PetApp() {
                 <div className="claim-admin-list">
                   {pendingClaims.map((claim) => (
                     <article className="claim-admin-item" key={claim.id}>
-                      <img src={claim.rewardImage} alt="" />
+                      <img src={appBaseUrl(claim.rewardImage)} alt="" />
                       <div>
                         <strong>{claim.rewardName}</strong>
                         <p>{claim.rewardDescription}</p>
@@ -1457,10 +1508,10 @@ export default function PetApp() {
         </div>
       )}
 
-      {pendingBuy && (
+      {childSurface && pendingBuy && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="buy-title">
           <div className="modal-card buy-card">
-            <img className="reward-confirm-art" src={pendingBuy.image} alt="" />
+            <img className="reward-confirm-art" src={appBaseUrl(pendingBuy.image)} alt="" />
             <h2 id="buy-title">带走{pendingBuy.name}？</h2>
             <p>需要使用 <strong>{pendingBuy.price}</strong> 枚金币</p>
             <div className="modal-actions"><button onClick={() => setPendingBuy(null)}>再想想</button><button className="primary-wide" onClick={confirmBuy}>确认购买</button></div>
@@ -1468,10 +1519,10 @@ export default function PetApp() {
         </div>
       )}
 
-      {pendingAvatar && (
+      {childSurface && pendingAvatar && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="avatar-unlock-title">
           <div className="modal-card buy-card">
-            <img className="reward-confirm-art" src={pendingAvatar.image} alt="" />
+            <img className="reward-confirm-art" src={appBaseUrl(pendingAvatar.image)} alt="" />
             <h2 id="avatar-unlock-title">让{pendingAvatar.name}加入小队？</h2>
             <p>一次解锁需要 <strong>{pendingAvatar.price}</strong> 枚金币，以后可以随时切换。</p>
             <div className="modal-actions"><button onClick={() => setPendingAvatar(null)}>再想想</button><button className="primary-wide" onClick={confirmAvatarUnlock}>确认解锁</button></div>
@@ -1479,10 +1530,10 @@ export default function PetApp() {
         </div>
       )}
 
-      {pendingReward && (
+      {childSurface && pendingReward && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="reward-request-title">
           <div className="modal-card buy-card">
-            <img className="reward-confirm-art" src={pendingReward.image} alt="" />
+            <img className="reward-confirm-art" src={appBaseUrl(pendingReward.image)} alt="" />
             <h2 id="reward-request-title">申请兑换“{pendingReward.name}”？</h2>
             <p>{pendingReward.description}</p>
             <p>现在会预扣 <strong>{pendingReward.price}</strong> 枚金币。家长兑现后留档；如果拒绝，会自动按原价退款。</p>
@@ -1538,7 +1589,7 @@ function PetPicker({ onChoose }: { onChoose: (avatarId: AvatarId, nickname: stri
                 setName(avatar.defaultNickname);
               }}
             >
-              <img src={avatar.image} alt="" /><strong>{avatar.name}</strong><i>{avatarId === avatar.id ? "✓" : ""}</i>
+              <img src={appBaseUrl(avatar.image)} alt="" /><strong>{avatar.name}</strong><i>{avatarId === avatar.id ? "✓" : ""}</i>
             </button>
           ))}
         </div>

@@ -32,3 +32,8 @@ jobs:
       - name: Build and test migrations
         run: npm test
 
+      - name: Type-check application
+        run: npm run typecheck:app
+
+      - name: Build GitHub Pages bundle
+        run: npm run build:pages

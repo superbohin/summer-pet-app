@@ -41,7 +41,7 @@ test("includes an installable offline-first manifest and service worker", async 
   assert.equal(manifest.id, "/");
   assert.equal(manifest.lang, "zh-CN");
   assert.ok(manifest.icons.some((icon) => icon.sizes === "512x512"));
-  assert.match(serviceWorker, /CACHE_PREFIX = "summer-pet-shell-"/);
+  assert.match(serviceWorker, /CACHE_PREFIX = `summer-pet-shell-\$\{SCOPE_KEY\}-`/);
   assert.match(serviceWorker, /event\.request\.mode === "navigate"/);
   assert.match(serviceWorker, /networkFirst\(event\.request, true\)/);
   assert.match(serviceWorker, /requestUrl\.pathname\.includes\("\/assets\/"\)/);
