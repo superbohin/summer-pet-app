@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import {
+  avatarCatalog,
+  defaultRealRewards,
+  virtualShopItems,
+} from "../lib/game-catalog.ts";
 
 async function render(path = "/") {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -41,23 +46,44 @@ test("includes an installable offline-first manifest and service worker", async 
   assert.match(serviceWorker, /networkFirst\(event\.request, true\)/);
   assert.match(serviceWorker, /requestUrl\.pathname\.includes\("\/assets\/"\)/);
   assert.match(serviceWorker, /caches\.match\("\/"\)/);
-  assert.match(serviceWorker, /"\/pets\/snake-v2\.png"/);
   assert.match(serviceWorker, /\.\.\.BUILD_ASSETS/);
   assert.match(builtServiceWorker, /const BUILD_ASSETS = \["\/assets\/[^"]+\.js"/);
   assert.match(builtServiceWorker, /"\/assets\/[^"]+\.css"/);
+  assert.match(builtServiceWorker, /"\/pets\/snake-v2\.png"/);
+  assert.match(builtServiceWorker, /"\/avatars\/anime-dog\.png"/);
+  assert.match(builtServiceWorker, /"\/avatars\/eggy-yellow\.png"/);
+  assert.match(builtServiceWorker, /"\/shop\/apple\.png"/);
+  assert.match(builtServiceWorker, /"\/reward-categories\/gift\.png"/);
   assert.doesNotMatch(serviceWorker, /indexedDB|localStorage|deleteDatabase/);
 });
 
+test("ships and precaches every catalog image", async () => {
+  const images = [...new Set([
+    ...avatarCatalog.map((item) => item.image),
+    ...virtualShopItems.map((item) => item.image),
+    ...defaultRealRewards.map((item) => item.image),
+  ])];
+  const builtServiceWorker = await readFile(new URL("../dist/client/sw.js", import.meta.url), "utf8");
+  await Promise.all(images.map((image) => readFile(new URL(`../public${image}`, import.meta.url))));
+  for (const image of images) {
+    assert.ok(builtServiceWorker.includes(JSON.stringify(image)), `${image} should be precached`);
+  }
+});
+
 test("keeps update, migration and recovery safeguards explicit", async () => {
-  const [appSource, dataSource] = await Promise.all([
+  const [appSource, dataSource, catalogSource] = await Promise.all([
     readFile(new URL("../app/PetApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/game-data.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/game-catalog.ts", import.meta.url), "utf8"),
   ]);
-  assert.match(dataSource, /record\.completed\.includes\(task\.id\)/);
+  assert.match(dataSource, /record\.completed\.includes\(taskId\)/);
   assert.match(appSource, /createTransaction\("purchase"/);
   assert.match(dataSource, /status: "pending"/);
-  assert.match(appSource, /检查后通过/);
-  assert.match(appSource, /type === "snake"/);
+  assert.match(appSource, /通过已勾选任务/);
+  assert.match(appSource, /approveTaskSubmissionsBatch/);
+  assert.match(appSource, /拒绝并退款/);
+  assert.match(catalogSource, /"anime-snake"/);
+  assert.match(catalogSource, /"eggy-yellow"/);
   assert.match(appSource, /visibilitychange/);
   assert.match(appSource, /setInterval\(reconcileDateAndCare/);
   assert.match(appSource, /snapshotAndReplaceGameData\(imported, "before-manual-import"\)/);
@@ -65,6 +91,8 @@ test("keeps update, migration and recovery safeguards explicit", async () => {
   assert.match(appSource, /再点一次，才会清空全部记录/);
   assert.match(dataSource, /indexedDB\.open\(DB_NAME, DB_VERSION\)/);
   assert.match(dataSource, /createTransaction\("task-reward"/);
+  assert.match(dataSource, /createTransaction\("avatar-unlock"/);
+  assert.match(dataSource, /createTransaction\("real-reward-reserve"/);
   assert.match(dataSource, /before-schema-v/);
   assert.match(dataSource, /corrupt-primary-recovery/);
   assert.match(dataSource, /care-penalty:/);

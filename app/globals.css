@@ -2471,3 +2471,487 @@ p {
     break-inside: avoid;
   }
 }
+
+/* 0.4.0: unified avatars, daily batch review and real-world rewards */
+.avatar-showcase,
+.real-reward-section,
+.pending-claims-card {
+  margin-top: 24px;
+  padding: 24px;
+  border: 1px solid rgba(31, 68, 74, 0.08);
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 18px 42px rgba(75, 103, 83, 0.09);
+}
+
+.pet-options {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.pet-options button {
+  min-height: 138px;
+  padding: 9px 6px;
+}
+
+.pet-options img {
+  width: 90px;
+  height: 90px;
+}
+
+.avatar-group + .avatar-group {
+  margin-top: 24px;
+}
+
+.avatar-group-title {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.avatar-group-title h3,
+.avatar-group-title p {
+  margin: 0;
+}
+
+.avatar-group-title p {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.avatar-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.avatar-card {
+  position: relative;
+  display: grid;
+  grid-template-rows: 180px auto auto;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  border: 2px solid transparent;
+  border-radius: 22px;
+  background: linear-gradient(150deg, #f7fff8, #fff8e8);
+  text-align: left;
+}
+
+.avatar-card.current {
+  border-color: #5ebc7a;
+  box-shadow: 0 10px 26px rgba(44, 143, 81, 0.16);
+}
+
+.avatar-art,
+.shop-art,
+.reward-art {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 10px 10px rgba(40, 67, 53, 0.15));
+}
+
+.avatar-card h4,
+.avatar-card p,
+.reward-card h3,
+.reward-card p {
+  margin: 0;
+}
+
+.avatar-card p {
+  min-height: 38px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.avatar-card button,
+.reward-card button,
+.batch-approve-button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 14px;
+  background: #197a4a;
+  color: white;
+  font: inherit;
+  font-weight: 800;
+}
+
+.avatar-card button:disabled,
+.reward-card button:disabled {
+  background: #dfe8e1;
+  color: #859089;
+}
+
+.avatar-card .avatar-owned {
+  color: #23774b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.family-ip-note {
+  margin: 18px 0 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #fff8df;
+  color: #725d2e;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.shop-card .shop-icon {
+  display: grid;
+  place-items: center;
+  height: 150px;
+  padding: 8px;
+  border-radius: 18px;
+  background: linear-gradient(155deg, #effdf3, #fff5dc);
+}
+
+.shop-card .shop-icon img {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.reward-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.reward-card {
+  display: grid;
+  grid-template-rows: 150px auto auto 1fr auto;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid rgba(31, 68, 74, 0.08);
+  border-radius: 22px;
+  background: linear-gradient(165deg, #fffef7, #f2fff6);
+}
+
+.reward-card .reward-art-wrap {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 17px;
+  background: #fff4cf;
+}
+
+.reward-card p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.reward-price,
+.claim-status {
+  color: #7e5e10;
+  font-weight: 900;
+}
+
+.reward-card.pending {
+  outline: 2px solid #efb94c;
+}
+
+.pending-claims-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.pending-claims-list article {
+  display: grid;
+  grid-template-columns: 60px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border-radius: 17px;
+  background: #fff8dc;
+}
+
+.pending-claims-list img {
+  width: 60px;
+  height: 60px;
+  object-fit: contain;
+}
+
+.pending-claims-list p,
+.pending-claims-list small {
+  display: block;
+  margin: 2px 0 0;
+  color: var(--muted);
+}
+
+.batch-review-list {
+  display: grid;
+  gap: 16px;
+}
+
+.batch-review-group {
+  padding: 15px;
+  border: 1px solid rgba(31, 68, 74, 0.1);
+  border-radius: 20px;
+  background: #fbfefb;
+}
+
+.batch-review-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.batch-review-head h4,
+.batch-review-head p {
+  margin: 0;
+}
+
+.batch-review-head p {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.batch-select-all {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  font-weight: 800;
+}
+
+.batch-select-all input,
+.batch-review-item input,
+.proof-toggle input {
+  width: 22px;
+  height: 22px;
+  accent-color: #197a4a;
+}
+
+.batch-review-items {
+  display: grid;
+  gap: 8px;
+}
+
+.batch-review-item {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 12px;
+  border-radius: 15px;
+  background: white;
+}
+
+.batch-review-item strong,
+.batch-review-item small {
+  display: block;
+}
+
+.batch-review-item small {
+  margin-top: 3px;
+  color: var(--muted);
+}
+
+.batch-review-item p {
+  margin: 7px 0 0;
+  color: #3b5f52;
+}
+
+.batch-approve-button {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.batch-warning {
+  margin: 10px 0 0;
+  color: #9a4d18;
+  font-size: 12px;
+}
+
+.claim-admin-list,
+.reward-admin-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.claim-admin-item,
+.reward-admin-item {
+  display: grid;
+  gap: 10px;
+  padding: 13px;
+  border-radius: 17px;
+  background: #f8fbf8;
+}
+
+.claim-admin-item {
+  grid-template-columns: 62px 1fr auto;
+  align-items: center;
+}
+
+.claim-admin-item img {
+  width: 62px;
+  height: 62px;
+  object-fit: contain;
+}
+
+.claim-admin-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.claim-admin-actions button,
+.reward-admin-item button {
+  min-height: 42px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 12px;
+  font-weight: 800;
+}
+
+.claim-fulfill {
+  background: #197a4a;
+  color: white;
+}
+
+.claim-refund {
+  background: #fff0e7;
+  color: #9b451d;
+}
+
+.reward-admin-item {
+  grid-template-columns: 1.5fr 100px 1.5fr 140px 90px;
+  align-items: end;
+}
+
+.reward-admin-item label,
+.custom-reward-form label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.reward-admin-item input,
+.reward-admin-item select,
+.custom-reward-form input,
+.custom-reward-form select {
+  min-height: 42px;
+  width: 100%;
+  border: 1px solid #dce8df;
+  border-radius: 11px;
+  padding: 0 10px;
+  background: white;
+  color: var(--ink);
+  font: inherit;
+}
+
+.reward-active-toggle {
+  display: flex !important;
+  grid-template-columns: 1fr auto !important;
+  align-items: center;
+  min-height: 42px;
+}
+
+.reward-active-toggle input {
+  width: 22px;
+}
+
+.custom-reward-form {
+  display: grid;
+  grid-template-columns: 1.2fr 100px 1.5fr 140px auto;
+  gap: 10px;
+  align-items: end;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed #cbdacf;
+}
+
+.proof-toggle {
+  display: flex !important;
+  grid-template-columns: auto 1fr !important;
+  align-items: center;
+  gap: 7px !important;
+}
+
+.task-edit-row .proof-prompt-input .proof-toggle input {
+  width: 22px;
+  min-height: 22px;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+}
+
+.reward-confirm-art {
+  display: block;
+  width: 180px;
+  height: 150px;
+  margin: 0 auto;
+  object-fit: contain;
+}
+
+@media (max-width: 900px) {
+  .avatar-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .reward-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .reward-admin-item,
+  .custom-reward-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .pet-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .avatar-showcase,
+  .real-reward-section,
+  .pending-claims-card {
+    padding: 16px 11px;
+    border-radius: 23px;
+  }
+
+  .avatar-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px;
+  }
+
+  .avatar-card {
+    grid-template-rows: 138px auto auto;
+  }
+
+  .reward-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pending-claims-list article,
+  .claim-admin-item {
+    grid-template-columns: 52px 1fr;
+  }
+
+  .pending-claims-list article > :last-child,
+  .claim-admin-actions {
+    grid-column: 2;
+  }
+
+  .batch-review-head {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .reward-admin-item,
+  .custom-reward-form {
+    grid-template-columns: 1fr;
+  }
+}

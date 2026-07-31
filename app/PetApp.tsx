@@ -8,33 +8,36 @@ import {
   DataSafetyError,
   FULL_BONUS_COINS,
   applyMissedFeedPenalties,
-  approveTaskSubmission,
+  approveTaskSubmissionsBatch,
   createInitialGameData,
   createSafetySnapshot,
   createTransaction,
   loadGameData,
   prepareImportedGameData,
   queueGameDataSave,
+  requestRealReward,
+  resolveRewardClaim,
   revokeTaskApproval,
   snapshotAndReplaceGameData,
   submitTaskForApproval,
+  switchAvatar,
+  unlockAvatar,
   type GameData,
-  type PetType,
+  type RealReward,
   type Task,
   type TaskCategory,
 } from "../lib/game-data";
+import {
+  avatarCatalog,
+  freeAvatarIds,
+  virtualShopItems,
+  type AvatarCatalogItem,
+  type AvatarId,
+  type RealRewardCategory,
+  type VirtualShopItem,
+} from "../lib/game-catalog";
 
 type Tab = "today" | "home" | "shop" | "growth";
-
-type ShopItem = {
-  id: string;
-  name: string;
-  icon: string;
-  price: number;
-  type: "food" | "toy" | "clothes" | "decor";
-  description: string;
-  permanent: boolean;
-};
 
 const badgeDefinitions = [
   { id: "first", icon: "🌟", name: "第一次打卡", hint: "完成第一个任务" },
@@ -47,24 +50,13 @@ const badgeDefinitions = [
 ];
 
 const defaultTasks: Task[] = [
-  { id: "read", title: "阅读20分钟", icon: "📖", category: "reading", coins: 10, xp: 5, active: true, proofPrompt: "写下今天读的书名和页码" },
-  { id: "write", title: "练字一页", icon: "✍️", category: "writing", coins: 10, xp: 5, active: true, proofPrompt: "写下练习内容，把练字本交给家长" },
-  { id: "sport", title: "运动30分钟", icon: "⚽", category: "sport", coins: 10, xp: 5, active: true, proofPrompt: "写下运动项目和大约时长" },
-  { id: "homework", title: "完成暑假作业", icon: "📝", category: "homework", coins: 10, xp: 5, active: true, proofPrompt: "写下完成了哪一页或哪几题" },
-  { id: "tidy", title: "整理自己的物品", icon: "🧸", category: "tidy", coins: 10, xp: 5, active: true, proofPrompt: "写下整理了什么，请家长现场查看" },
-  { id: "help", title: "帮家里做一件小事", icon: "🧹", category: "help", coins: 10, xp: 5, active: true, proofPrompt: "写下帮家里做了什么" },
-  { id: "sleep", title: "21:30前准备睡觉", icon: "🌙", category: "sleep", coins: 10, xp: 5, active: true, proofPrompt: "睡前请家长当面验收" },
-];
-
-const shopItems: ShopItem[] = [
-  { id: "apple", name: "脆脆苹果", icon: "🍎", price: 8, type: "food", description: "饱食度 +12", permanent: false },
-  { id: "cake", name: "星星蛋糕", icon: "🧁", price: 16, type: "food", description: "饱食度 +25", permanent: false },
-  { id: "ball", name: "彩虹皮球", icon: "⚽", price: 25, type: "toy", description: "开心值 +20", permanent: false },
-  { id: "blocks", name: "积木小城", icon: "🧱", price: 35, type: "toy", description: "开心值 +28", permanent: false },
-  { id: "cape", name: "勇气披风", icon: "🦸", price: 45, type: "clothes", description: "穿上它去冒险", permanent: true },
-  { id: "hat", name: "夏日草帽", icon: "👒", price: 40, type: "clothes", description: "清凉又神气", permanent: true },
-  { id: "plant", name: "向日葵盆栽", icon: "🌻", price: 50, type: "decor", description: "小屋充满阳光", permanent: true },
-  { id: "tent", name: "星空帐篷", icon: "⛺", price: 65, type: "decor", description: "在家也能露营", permanent: true },
+  { id: "read", title: "阅读20分钟", icon: "📖", category: "reading", coins: 10, xp: 5, active: true, proofPrompt: "写下今天读的书名和页码", requiresProof: true },
+  { id: "write", title: "练字一页", icon: "✍️", category: "writing", coins: 10, xp: 5, active: true, proofPrompt: "写下练习内容，把练字本交给家长", requiresProof: true },
+  { id: "sport", title: "运动30分钟", icon: "⚽", category: "sport", coins: 10, xp: 5, active: true, proofPrompt: "完成后可以一键提交", requiresProof: false },
+  { id: "homework", title: "完成暑假作业", icon: "📝", category: "homework", coins: 10, xp: 5, active: true, proofPrompt: "写下完成了哪一页或哪几题", requiresProof: true },
+  { id: "tidy", title: "整理自己的物品", icon: "🧸", category: "tidy", coins: 10, xp: 5, active: true, proofPrompt: "完成后可以一键提交", requiresProof: false },
+  { id: "help", title: "帮家里做一件小事", icon: "🧹", category: "help", coins: 10, xp: 5, active: true, proofPrompt: "完成后可以一键提交", requiresProof: false },
+  { id: "sleep", title: "21:30前准备睡觉", icon: "🌙", category: "sleep", coins: 10, xp: 5, active: true, proofPrompt: "完成后可以一键提交", requiresProof: false },
 ];
 
 const encouragements = [
@@ -128,14 +120,29 @@ function achievedBadges(data: GameData) {
   return achieved;
 }
 
-function petFace(type: PetType) {
-  if (type === "cat") return { image: "/pets/cat-v2.png", label: "银蓝小猫" };
-  if (type === "snake") return { image: "/pets/snake-v2.png", label: "翡翠小蛇" };
-  if (type === "dino") return { image: "/pets/dino-v2.png", label: "青绿恐龙" };
-  return { image: "/pets/dog-v2.png", label: "阳光小狗" };
+function groupPendingSubmissions(submissions: GameData["submissions"]) {
+  const groups = new Map<string, GameData["submissions"]>();
+  submissions.forEach((submission) => {
+    const group = groups.get(submission.date) ?? [];
+    group.push(submission);
+    groups.set(submission.date, group);
+  });
+  return [...groups.entries()].sort(([left], [right]) => right.localeCompare(left));
 }
 
-const petTypes: PetType[] = ["dog", "cat", "snake", "dino"];
+const rewardCategoryLabels: Record<RealRewardCategory, string> = {
+  privilege: "小特权",
+  family: "家庭时光",
+  outing: "外出活动",
+  gift: "实物礼物",
+};
+
+const rewardCategoryImages: Record<RealRewardCategory, string> = {
+  privilege: "/reward-categories/privilege.png",
+  family: "/reward-categories/family.png",
+  outing: "/reward-categories/outing.png",
+  gift: "/reward-categories/gift.png",
+};
 
 function playTone(enabled: boolean, high = false) {
   if (!enabled || typeof window === "undefined") return;
@@ -185,7 +192,17 @@ export default function PetApp() {
   const [newTask, setNewTask] = useState("");
   const [submissionTask, setSubmissionTask] = useState<Task | null>(null);
   const [proofNote, setProofNote] = useState("");
-  const [pendingBuy, setPendingBuy] = useState<ShopItem | null>(null);
+  const [pendingBuy, setPendingBuy] = useState<VirtualShopItem | null>(null);
+  const [pendingAvatar, setPendingAvatar] = useState<AvatarCatalogItem | null>(null);
+  const [pendingReward, setPendingReward] = useState<RealReward | null>(null);
+  const [reviewSelection, setReviewSelection] = useState<Record<string, boolean>>({});
+  const [batchConfirmDate, setBatchConfirmDate] = useState<string | null>(null);
+  const [newReward, setNewReward] = useState<{
+    name: string;
+    price: number;
+    description: string;
+    category: RealRewardCategory;
+  }>({ name: "", price: 100, description: "", category: "family" });
   const [resetArmed, setResetArmed] = useState(false);
   const [eyeReminder, setEyeReminder] = useState(false);
   const [installHelp, setInstallHelp] = useState(false);
@@ -196,6 +213,8 @@ export default function PetApp() {
   const completedCount = activeTasks.filter((task) => todayRecord.completed.includes(task.id)).length;
   const pendingSubmissions = data.submissions.filter((submission) => submission.status === "pending");
   const todayPending = pendingSubmissions.filter((submission) => submission.date === todayKey);
+  const pendingClaims = data.rewardClaims.filter((claim) => claim.status === "pending");
+  const submissionsByDate = groupPendingSubmissions(pendingSubmissions);
   const fedToday = data.care.fedDates.includes(todayKey);
   const level = getLevel(data.pet.xp);
   const levelProgress = data.pet.xp % 50;
@@ -319,6 +338,16 @@ export default function PetApp() {
   };
 
   const openSubmission = (task: Task) => {
+    if (!task.requiresProof) {
+      const result = submitTaskForApproval(data, task.id, todayKey, "");
+      if (!result.submitted) {
+        showToast("这项任务已经提交或验收过了");
+        return;
+      }
+      setData(result.data);
+      showToast("已一键提交，等待家长今日批量验收");
+      return;
+    }
     setSubmissionTask(task);
     setProofNote("");
   };
@@ -326,11 +355,16 @@ export default function PetApp() {
   const submitTask = () => {
     if (!submissionTask) return;
     const note = proofNote.trim();
-    if (note.length < 2) {
+    if (submissionTask.requiresProof && note.length < 2) {
       showToast("请先写清楚完成情况");
       return;
     }
-    setData((current) => submitTaskForApproval(current, submissionTask.id, todayKey, note).data);
+    const result = submitTaskForApproval(data, submissionTask.id, todayKey, note);
+    if (!result.submitted) {
+      showToast("这项任务已经提交或验收过了");
+      return;
+    }
+    setData(result.data);
     setSubmissionTask(null);
     setProofNote("");
     showToast("已提交，等待家长验收");
@@ -344,30 +378,28 @@ export default function PetApp() {
     showToast("已撤回这次申请");
   };
 
-  const approveSubmission = (submissionId: string) => {
-    const result = approveTaskSubmission(data, submissionId);
-    if (!result.approved) {
-      showToast("这项任务已失效，请退回后重新提交");
+  const approveBatch = (date: string, confirmed = false) => {
+    const submissions = pendingSubmissions.filter((submission) => submission.date === date);
+    const selectedIds = submissions.filter((submission) => reviewSelection[submission.id] !== false).map((submission) => submission.id);
+    const unselectedCount = submissions.length - selectedIds.length;
+    if (unselectedCount > 0 && !confirmed) {
+      setBatchConfirmDate(date);
+      return;
+    }
+    const result = approveTaskSubmissionsBatch(data, date, selectedIds);
+    if (result.processed === 0) {
+      showToast("这一天没有可处理的任务");
       return;
     }
     setData(updateWithBadges(result.data, data.badges));
+    setBatchConfirmDate(null);
     playTone(data.settings.sound, true);
     setCelebrating(true);
     setTimeout(() => setCelebrating(false), data.settings.animations ? 1200 : 0);
-    showToast(`验收通过！${encouragements[(completedCount + data.pet.xp) % encouragements.length]}`);
-  };
-
-  const rejectSubmission = (submissionId: string) => {
-    const reviewedAt = new Date().toISOString();
-    setData((current) => ({
-      ...current,
-      submissions: current.submissions.map((submission) =>
-        submission.id === submissionId && submission.status === "pending"
-          ? { ...submission, status: "rejected" as const, reviewedAt }
-          : submission
-      ),
-    }));
-    showToast("已退回，请孩子完成后重新提交");
+    const message = result.rejectedSubmissionIds.length
+      ? `已通过 ${result.approvedSubmissionIds.length} 项，退回 ${result.rejectedSubmissionIds.length} 项`
+      : `今日任务一次验收完成！${encouragements[(completedCount + data.pet.xp) % encouragements.length]}`;
+    showToast(message);
   };
 
   const undoTask = (task: Task) => {
@@ -399,7 +431,7 @@ export default function PetApp() {
     showToast(messages[action]);
   };
 
-  const buyItem = (item: ShopItem) => {
+  const buyItem = (item: VirtualShopItem) => {
     if (data.pet.coins < item.price) {
       showToast("金币还不够，再完成几个任务吧！");
       return;
@@ -423,8 +455,8 @@ export default function PetApp() {
           ...current.pet,
           coins: current.pet.coins - pendingBuy.price,
           owned,
-          hunger: clamp(current.pet.hunger + (pendingBuy.type === "food" ? (pendingBuy.id === "cake" ? 25 : 12) : 0)),
-          happiness: clamp(current.pet.happiness + (pendingBuy.type === "toy" ? (pendingBuy.id === "blocks" ? 28 : 20) : 0)),
+          hunger: clamp(current.pet.hunger + (pendingBuy.effect.hunger ?? 0)),
+          happiness: clamp(current.pet.happiness + (pendingBuy.effect.happiness ?? 0)),
           equippedClothes: pendingBuy.type === "clothes" ? pendingBuy.id : current.pet.equippedClothes,
           equippedDecor: pendingBuy.type === "decor" ? pendingBuy.id : current.pet.equippedDecor,
         },
@@ -449,7 +481,7 @@ export default function PetApp() {
     setPendingBuy(null);
   };
 
-  const equipItem = (item: ShopItem) => {
+  const equipItem = (item: VirtualShopItem) => {
     setData((current) => ({
       ...current,
       pet: {
@@ -461,16 +493,123 @@ export default function PetApp() {
     showToast(`已经换上${item.name}！`);
   };
 
-  const choosePet = (type: PetType, nickname: string) => {
+  const choosePet = (avatarId: AvatarId, nickname: string) => {
     const safeName = nickname.trim().slice(0, 8) || "小布丁";
-    setData((current) => ({ ...current, pet: { ...current.pet, type, nickname: safeName, chosen: true } }));
+    setData((current) => {
+      const switched = switchAvatar(current, avatarId).data;
+      return { ...switched, pet: { ...switched.pet, nickname: safeName, chosen: true } };
+    });
     showToast(`你好呀，${safeName}！`);
+  };
+
+  const selectAvatar = (avatar: AvatarCatalogItem) => {
+    if (data.pet.ownedAvatars.includes(avatar.id)) {
+      const result = switchAvatar(data, avatar.id);
+      if (result.switched) {
+        setData(result.data);
+        showToast(`已换成${avatar.name}，成长记录都还在`);
+      }
+      return;
+    }
+    if (data.pet.coins < avatar.price) {
+      showToast("金币还不够，继续完成任务吧！");
+      return;
+    }
+    setPendingAvatar(avatar);
+  };
+
+  const confirmAvatarUnlock = () => {
+    if (!pendingAvatar) return;
+    const unlocked = unlockAvatar(data, pendingAvatar.id);
+    if (!unlocked.unlocked) {
+      showToast(data.pet.ownedAvatars.includes(pendingAvatar.id) ? "这个角色已经拥有了" : "金币还不够");
+      setPendingAvatar(null);
+      return;
+    }
+    setData(switchAvatar(unlocked.data, pendingAvatar.id).data);
+    playTone(data.settings.sound, true);
+    showToast(`${pendingAvatar.name}加入冒险小队啦！`);
+    setPendingAvatar(null);
+  };
+
+  const confirmRealReward = () => {
+    if (!pendingReward) return;
+    const result = requestRealReward(data, pendingReward.id);
+    if (!result.requested) {
+      const duplicate = data.rewardClaims.some((claim) => claim.rewardId === pendingReward.id && claim.status === "pending");
+      showToast(duplicate ? "这个奖励已经在等待家长兑现" : "金币不够或奖励已停用");
+      setPendingReward(null);
+      return;
+    }
+    setData(result.data);
+    playTone(data.settings.sound, true);
+    showToast("兑换申请已提交，金币已预扣");
+    setPendingReward(null);
+  };
+
+  const resolveClaim = (claimId: string, resolution: "fulfilled" | "refunded") => {
+    const result = resolveRewardClaim(data, claimId, resolution);
+    if (!result.resolved) {
+      showToast("这条申请已经处理过了");
+      return;
+    }
+    setData(result.data);
+    showToast(resolution === "fulfilled" ? "已记录兑现，孩子会看到完成状态" : "已拒绝并按原价退还金币");
+  };
+
+  const updateRealReward = (id: string, patch: Partial<RealReward>) => {
+    setData((current) => ({
+      ...current,
+      realRewards: current.realRewards.map((reward) => {
+        if (reward.id !== id) return reward;
+        const next = { ...reward, ...patch };
+        return patch.category
+          ? { ...next, image: rewardCategoryImages[patch.category] }
+          : next;
+      }),
+    }));
+  };
+
+  const addRealReward = () => {
+    const name = newReward.name.trim();
+    const description = newReward.description.trim();
+    if (!name || !description || newReward.price < 1) {
+      showToast("请填好奖励名称、说明和价格");
+      return;
+    }
+    const nextCustomNumber = data.realRewards.reduce((maximum, reward) => {
+      const match = /^real-custom-(\d+)$/.exec(reward.id);
+      return match ? Math.max(maximum, Number(match[1])) : maximum;
+    }, 0) + 1;
+    const reward: RealReward = {
+      id: `real-custom-${nextCustomNumber}`,
+      name: name.slice(0, 30),
+      price: Math.min(9999, Math.max(1, Math.round(newReward.price))),
+      description: description.slice(0, 80),
+      category: newReward.category,
+      image: rewardCategoryImages[newReward.category],
+      active: true,
+    };
+    setData((current) => ({ ...current, realRewards: [...current.realRewards, reward] }));
+    setNewReward({ name: "", price: 100, description: "", category: "family" });
+    showToast("新的现实奖励已加入商店");
+  };
+
+  const deleteRealReward = (id: string) => {
+    if (data.rewardClaims.some((claim) => claim.rewardId === id)) {
+      showToast("已有兑换历史，只能停用，不能删除");
+      return;
+    }
+    setData((current) => ({ ...current, realRewards: current.realRewards.filter((reward) => reward.id !== id) }));
+    showToast("奖励已删除");
   };
 
   const openParent = () => {
     setPinInput("");
     setPinConfirm("");
     setParentError("");
+    setReviewSelection(Object.fromEntries(pendingSubmissions.map((submission) => [submission.id, true])));
+    setBatchConfirmDate(null);
     setParentStage(data.settings.parentPin ? "challenge" : "setup");
   };
 
@@ -545,6 +684,7 @@ export default function PetApp() {
           xp: 5,
           active: true,
           proofPrompt: "写下完成情况，交给家长检查",
+          requiresProof: true,
         },
       ],
     }));
@@ -630,9 +770,9 @@ export default function PetApp() {
     ];
   }, []);
 
-  const pet = petFace(data.pet.type);
-  const equippedClothes = shopItems.find((item) => item.id === data.pet.equippedClothes);
-  const equippedDecor = shopItems.find((item) => item.id === data.pet.equippedDecor);
+  const pet = avatarCatalog.find((avatar) => avatar.id === data.pet.avatarId) ?? avatarCatalog[0];
+  const equippedClothes = virtualShopItems.find((item) => item.id === data.pet.equippedClothes);
+  const equippedDecor = virtualShopItems.find((item) => item.id === data.pet.equippedDecor);
 
   if (!hydrated) {
     return <main className="loading-screen" aria-live="polite"><div className="loading-paw">🐾</div><p>正在叫醒你的小伙伴…</p></main>;
@@ -725,7 +865,7 @@ export default function PetApp() {
 
             <div className="section-heading">
               <div><span className="section-label">TODAY</span><h2>今天要做这些事</h2></div>
-              <p>提交说明后，由家长验收发奖励</p>
+              <p>重点任务写说明，其他任务一键提交；家长每天批量验收</p>
             </div>
 
             {activeTasks.length === 0 ? (
@@ -741,7 +881,7 @@ export default function PetApp() {
                       <div className="task-copy">
                         <h3>{task.title}</h3>
                         <p><span>🪙 +{task.coins}</span><span>⭐ +{task.xp}</span></p>
-                        <small>{task.proofPrompt}</small>
+                        <small>{task.requiresProof ? `📝 ${task.proofPrompt}` : "⚡ 完成后可一键提交"}</small>
                       </div>
                       {done ? (
                         <div className="done-button" aria-label={`${task.title}已经家长验收`}>
@@ -754,7 +894,9 @@ export default function PetApp() {
                           <small>点此撤回</small>
                         </button>
                       ) : (
-                        <button className="complete-button" onClick={() => openSubmission(task)}>申请验收</button>
+                        <button className="complete-button" onClick={() => openSubmission(task)}>
+                          {task.requiresProof ? "填写并提交" : "一键提交"}
+                        </button>
                       )}
                     </article>
                   );
@@ -777,7 +919,7 @@ export default function PetApp() {
               {equippedDecor && <div className="equipped-decor" aria-label={equippedDecor.name}>{equippedDecor.icon}</div>}
               <button className="big-pet" onClick={() => petAction("pet")} aria-label={`摸摸${data.pet.nickname}`}>
                 {equippedClothes && <span className="pet-clothes">{equippedClothes.icon}</span>}
-                <img className="pet-emoji" src={pet.image} alt={pet.label} />
+                <img className="pet-emoji" src={pet.image} alt={pet.name} />
                 <span className="pet-shadow" />
               </button>
               <div className={`speech-bubble ${fedToday ? "fed" : "hungry"}`}>
@@ -808,10 +950,30 @@ export default function PetApp() {
               <section className="wardrobe">
                 <div className="section-heading compact"><div><span className="section-label">MY ITEMS</span><h2>我的衣柜和装饰</h2></div></div>
                 <div className="owned-list">
-                  {shopItems.filter((item) => data.pet.owned.includes(item.id)).map((item) => (
+                  {virtualShopItems.filter((item) => data.pet.owned.includes(item.id)).map((item) => (
                     <button key={item.id} onClick={() => equipItem(item)} className={(item.id === data.pet.equippedClothes || item.id === data.pet.equippedDecor) ? "equipped" : ""}>
                       <span>{item.icon}</span>{item.name}
                     </button>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {data.rewardClaims.length > 0 && (
+              <section className="pending-claims-card">
+                <div className="section-heading compact">
+                  <div><span className="section-label">REAL REWARD STATUS</span><h2>现实奖励进度</h2></div>
+                  <p>{pendingClaims.length ? `${pendingClaims.length} 个愿望正在排队` : "最近的奖励都处理完了"}</p>
+                </div>
+                <div className="pending-claims-list">
+                  {[...data.rewardClaims].reverse().slice(0, 6).map((claim) => (
+                    <article key={claim.id}>
+                      <img src={claim.rewardImage} alt="" />
+                      <div><strong>{claim.rewardName}</strong><p>{claim.rewardDescription}</p><small>{claim.price} 金币已预扣</small></div>
+                      <span className="claim-status">
+                        {claim.status === "pending" ? "⏳ 待兑现" : claim.status === "fulfilled" ? "✅ 已兑现" : "↩️ 已退款"}
+                      </span>
+                    </article>
                   ))}
                 </div>
               </section>
@@ -822,9 +984,44 @@ export default function PetApp() {
         {tab === "shop" && (
           <section className="shop-page page-enter">
             <div className="shop-banner">
-              <div><span className="section-label">SUNNY SHOP</span><h2>用努力换来的金币<br />装扮你的小伙伴</h2></div>
+              <div><span className="section-label">SUNNY SHOP</span><h2>用努力换来的金币<br />解锁伙伴和现实愿望</h2></div>
               <div className="shop-coin"><span>🪙</span><strong>{data.pet.coins}</strong><small>我的金币</small></div>
             </div>
+
+            <section className="avatar-showcase">
+              <div className="section-heading compact">
+                <div><span className="section-label">AVATAR BOOK</span><h2>冒险伙伴图鉴</h2></div>
+                <p>切换外观不会改变昵称、等级、金币或历史</p>
+              </div>
+              {(["pet", "anime", "eggy"] as const).map((group) => (
+                <div className="avatar-group" key={group}>
+                  <div className="avatar-group-title">
+                    <h3>{group === "pet" ? "宠物原形" : group === "anime" ? "拟人伙伴" : "蛋仔角色"}</h3>
+                    <p>{group === "pet" ? "四只原形全部免费" : group === "anime" ? "二次元 Q 版少年冒险小队" : "家庭私用角色"}</p>
+                  </div>
+                  <div className="avatar-grid">
+                    {avatarCatalog.filter((avatar) => avatar.group === group).map((avatar) => {
+                      const owned = data.pet.ownedAvatars.includes(avatar.id);
+                      const current = data.pet.avatarId === avatar.id;
+                      return (
+                        <article className={`avatar-card ${current ? "current" : ""}`} key={avatar.id}>
+                          <img className="avatar-art" src={avatar.image} alt={avatar.name} />
+                          <div>
+                            <h4>{avatar.name}</h4>
+                            <p>{current ? "现在正在一起冒险" : owned ? "已经加入我的图鉴" : `需要 ${avatar.price} 枚金币解锁`}</p>
+                          </div>
+                          <button onClick={() => selectAvatar(avatar)} disabled={current || (!owned && data.pet.coins < avatar.price)}>
+                            {current ? "正在使用" : owned ? "切换角色" : <>🪙 {avatar.price} 解锁</>}
+                          </button>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+              <p className="family-ip-note">蛋仔角色仅用于私有家庭站点。《蛋仔派对》角色属于网易商业 IP；若公开仓库或站点，请先替换为原创素材。</p>
+            </section>
+
             {(["food", "toy", "clothes", "decor"] as const).map((type) => (
               <section className="shop-section" key={type}>
                 <div className="section-heading compact">
@@ -832,12 +1029,12 @@ export default function PetApp() {
                   <p>{type === "food" ? "补充饱食度" : type === "toy" ? "增加开心值" : "买一次就永久拥有"}</p>
                 </div>
                 <div className="shop-grid">
-                  {shopItems.filter((item) => item.type === type).map((item) => {
+                  {virtualShopItems.filter((item) => item.type === type).map((item) => {
                     const owned = item.permanent && data.pet.owned.includes(item.id);
                     const equipped = item.id === data.pet.equippedClothes || item.id === data.pet.equippedDecor;
                     return (
                       <article className="shop-card" key={item.id}>
-                        <div className="shop-icon">{item.icon}</div>
+                        <div className="shop-icon"><img className="shop-art" src={item.image} alt="" /></div>
                         <h3>{item.name}</h3>
                         <p>{item.description}</p>
                         <button onClick={() => buyItem(item)} disabled={!owned && data.pet.coins < item.price}>
@@ -849,6 +1046,35 @@ export default function PetApp() {
                 </div>
               </section>
             ))}
+
+            <section className="real-reward-section">
+              <div className="section-heading compact">
+                <div><span className="section-label">REAL WORLD REWARDS</span><h2>把坚持换成现实里的快乐</h2></div>
+                <p>兑换后立即预扣金币，家长兑现或拒绝退款</p>
+              </div>
+              <div className="reward-grid">
+                {data.realRewards.filter((reward) => reward.active).length === 0 && (
+                  <div className="review-empty">家长暂时没有开启现实奖励</div>
+                )}
+                {data.realRewards.filter((reward) => reward.active).map((reward) => {
+                  const pending = pendingClaims.some((claim) => claim.rewardId === reward.id);
+                  return (
+                    <article className={`reward-card ${pending ? "pending" : ""}`} key={reward.id}>
+                      <div className="reward-art-wrap"><img className="reward-art" src={reward.image} alt="" /></div>
+                      <h3>{reward.name}</h3>
+                      <span className="reward-price">🪙 {reward.price} · {rewardCategoryLabels[reward.category]}</span>
+                      <p>{reward.description}</p>
+                      <button
+                        disabled={pending || data.pet.coins < reward.price}
+                        onClick={() => setPendingReward(reward)}
+                      >
+                        {pending ? "已申请，待兑现" : data.pet.coins < reward.price ? "金币还不够" : "申请兑换"}
+                      </button>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
           </section>
         )}
 
@@ -909,7 +1135,13 @@ export default function PetApp() {
                 {[...data.transactions].reverse().slice(0, 12).map((transaction) => (
                   <article key={transaction.id}>
                     <span className="ledger-icon">
-                      {transaction.kind === "purchase" ? "🛍️" : transaction.kind === "care-penalty" ? "🍂" : transaction.coinsDelta < 0 ? "↩️" : "⭐"}
+                      {transaction.kind === "purchase" ? "🛍️"
+                        : transaction.kind === "care-penalty" ? "🍂"
+                          : transaction.kind === "avatar-unlock" ? "🧑‍🚀"
+                            : transaction.kind === "real-reward-reserve" ? "🎟️"
+                              : transaction.kind === "real-reward-fulfilled" ? "✅"
+                                : transaction.kind === "real-reward-refund" ? "↩️"
+                                  : transaction.coinsDelta < 0 ? "↩️" : "⭐"}
                     </span>
                     <div><strong>{transaction.note}</strong><small>{transaction.date}</small></div>
                     <p className={transaction.coinsDelta < 0 ? "negative" : "positive"}>
@@ -994,26 +1226,63 @@ export default function PetApp() {
 
             <section className="settings-section review-section">
               <div className="review-heading">
-                <div><h3>待家长验收</h3><p className="settings-help">孩子提交说明不会立即得到奖励，必须由您检查后确认。</p></div>
+                <div><h3>每日一次批量验收</h3><p className="settings-help">默认全选通过；只有任务有问题时才取消勾选。漏审日期会一直保留。</p></div>
                 <span>{pendingSubmissions.length}</span>
               </div>
               {pendingSubmissions.length === 0 ? (
                 <div className="review-empty">暂时没有待验收任务</div>
               ) : (
-                <div className="review-list">
-                  {pendingSubmissions.map((submission) => (
-                    <article key={submission.id}>
-                      <div>
-                        <strong>{submission.taskTitle}</strong>
-                        <small>{submission.date} · 孩子说明</small>
-                        <p>{submission.proofNote}</p>
-                      </div>
-                      <div className="review-actions">
-                        <button className="reject-review" onClick={() => rejectSubmission(submission.id)}>退回</button>
-                        <button className="approve-review" onClick={() => approveSubmission(submission.id)}>检查后通过</button>
-                      </div>
-                    </article>
-                  ))}
+                <div className="batch-review-list">
+                  {submissionsByDate.map(([date, submissions]) => {
+                    const selectedCount = submissions.filter((submission) => reviewSelection[submission.id] !== false).length;
+                    const allSelected = selectedCount === submissions.length;
+                    const confirming = batchConfirmDate === date;
+                    return (
+                      <section className="batch-review-group" key={date}>
+                        <div className="batch-review-head">
+                          <div><h4>{date === todayKey ? `今天 · ${date}` : date}</h4><p>{submissions.length} 项待验收，已选 {selectedCount} 项</p></div>
+                          <label className="batch-select-all">
+                            <input
+                              type="checkbox"
+                              checked={allSelected}
+                              onChange={(event) => setReviewSelection((current) => ({
+                                ...current,
+                                ...Object.fromEntries(submissions.map((submission) => [submission.id, event.target.checked])),
+                              }))}
+                            />
+                            全选
+                          </label>
+                        </div>
+                        <div className="batch-review-items">
+                          {submissions.map((submission) => (
+                            <label className="batch-review-item" key={submission.id}>
+                              <input
+                                type="checkbox"
+                                checked={reviewSelection[submission.id] !== false}
+                                onChange={(event) => {
+                                  setReviewSelection((current) => ({ ...current, [submission.id]: event.target.checked }));
+                                  setBatchConfirmDate(null);
+                                }}
+                              />
+                              <div>
+                                <strong>{submission.taskTitle}</strong>
+                                <small>{submission.proofNote ? "孩子说明" : "普通任务 · 一键提交"}</small>
+                                {submission.proofNote && <p>{submission.proofNote}</p>}
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                        {confirming && <p className="batch-warning">未勾选的 {submissions.length - selectedCount} 项将统一退回。请再点一次确认。</p>}
+                        <button
+                          className="batch-approve-button"
+                          onClick={() => approveBatch(date, confirming)}
+                          disabled={selectedCount === 0 && submissions.length === 0}
+                        >
+                          {confirming ? "确认通过并退回未选项" : `通过已勾选任务（${selectedCount}）`}
+                        </button>
+                      </section>
+                    );
+                  })}
                 </div>
               )}
               {todayRecord.completed.length > 0 && (
@@ -1028,17 +1297,15 @@ export default function PetApp() {
 
             <section className="settings-section pet-care-settings">
               <div>
-                <h3>宠物和照料规则</h3>
-                <p className="settings-help">可以直接换成小蛇，不会影响已有金币、打卡和兑换记录。</p>
+                <h3>当前伙伴和照料规则</h3>
+                <p className="settings-help">角色统一在商店图鉴里解锁和切换；换外观不会影响昵称、等级、金币或历史。</p>
                 <div className="parent-pet-picker">
-                  {petTypes.map((petType) => {
-                    const option = petFace(petType);
-                    return (
-                      <button className={data.pet.type === petType ? "selected" : ""} key={petType} onClick={() => setData((current) => ({ ...current, pet: { ...current.pet, type: petType } }))}>
-                        <img src={option.image} alt="" /><span>{option.label}</span>
-                      </button>
-                    );
-                  })}
+                  <button className="selected" onClick={() => {
+                    setParentStage("closed");
+                    setTab("shop");
+                  }}>
+                    <img src={pet.image} alt="" /><span>{pet.name} · 打开图鉴</span>
+                  </button>
                 </div>
               </div>
               <div className="penalty-controls">
@@ -1047,6 +1314,70 @@ export default function PetApp() {
                   <input type="number" min="0" max="20" value={data.settings.missedFeedCoins} onChange={(event) => setData((current) => ({ ...current, settings: { ...current.settings, missedFeedCoins: Math.max(0, Math.min(20, Number(event.target.value) || 0)) } }))} />
                 </label>
                 <p>漏喂还会让饱食度降低15、开心值降低8；金币不会扣成负数，宠物不会死亡。每天只计算一次，关闭期间不会补扣。</p>
+              </div>
+            </section>
+
+            <section className="settings-section">
+              <div className="review-heading">
+                <div><h3>现实奖励兑现</h3><p className="settings-help">孩子兑换时已经扣除金币；兑现后留档，拒绝则按兑换原价退款。</p></div>
+                <span>{pendingClaims.length}</span>
+              </div>
+              {pendingClaims.length === 0 ? (
+                <div className="review-empty">暂时没有待兑现奖励</div>
+              ) : (
+                <div className="claim-admin-list">
+                  {pendingClaims.map((claim) => (
+                    <article className="claim-admin-item" key={claim.id}>
+                      <img src={claim.rewardImage} alt="" />
+                      <div>
+                        <strong>{claim.rewardName}</strong>
+                        <p>{claim.rewardDescription}</p>
+                        <small>{claim.requestedAt.slice(0, 10)} · 已预扣 {claim.price} 金币</small>
+                      </div>
+                      <div className="claim-admin-actions">
+                        <button className="claim-refund" onClick={() => resolveClaim(claim.id, "refunded")}>拒绝并退款</button>
+                        <button className="claim-fulfill" onClick={() => resolveClaim(claim.id, "fulfilled")}>已兑现</button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="settings-section">
+              <h3>现实奖励商店</h3>
+              <p className="settings-help">可修改名称、价格、说明、分类图片和启用状态。已有兑换历史的奖励只能停用，不能删除。</p>
+              <div className="reward-admin-list">
+                {data.realRewards.map((reward) => {
+                  const hasClaims = data.rewardClaims.some((claim) => claim.rewardId === reward.id);
+                  return (
+                    <div className="reward-admin-item" key={reward.id}>
+                      <label>名称<input value={reward.name} onChange={(event) => updateRealReward(reward.id, { name: event.target.value.slice(0, 30) })} /></label>
+                      <label>价格<input type="number" min="1" max="9999" step="1" value={reward.price} onChange={(event) => updateRealReward(reward.id, { price: Math.min(9999, Math.max(1, Math.round(Number(event.target.value) || 1))) })} /></label>
+                      <label>说明<input value={reward.description} onChange={(event) => updateRealReward(reward.id, { description: event.target.value.slice(0, 80) })} /></label>
+                      <label>分类
+                        <select value={reward.category} onChange={(event) => updateRealReward(reward.id, { category: event.target.value as RealRewardCategory })}>
+                          {(Object.keys(rewardCategoryLabels) as RealRewardCategory[]).map((category) => <option key={category} value={category}>{rewardCategoryLabels[category]}</option>)}
+                        </select>
+                      </label>
+                      <div>
+                        <label className="reward-active-toggle"><span>启用</span><input type="checkbox" checked={reward.active} onChange={(event) => updateRealReward(reward.id, { active: event.target.checked })} /></label>
+                        <button onClick={() => deleteRealReward(reward.id)} disabled={hasClaims} title={hasClaims ? "已有兑换历史，只能停用" : "删除奖励"}>删除</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="custom-reward-form">
+                <label>新奖励名称<input value={newReward.name} onChange={(event) => setNewReward((current) => ({ ...current, name: event.target.value }))} placeholder="例如：选择周末早餐" /></label>
+                <label>价格<input type="number" min="1" max="9999" step="1" value={newReward.price} onChange={(event) => setNewReward((current) => ({ ...current, price: Math.min(9999, Math.max(1, Math.round(Number(event.target.value) || 1))) }))} /></label>
+                <label>说明<input value={newReward.description} onChange={(event) => setNewReward((current) => ({ ...current, description: event.target.value }))} placeholder="家长兑现时需要知道的内容" /></label>
+                <label>分类
+                  <select value={newReward.category} onChange={(event) => setNewReward((current) => ({ ...current, category: event.target.value as RealRewardCategory }))}>
+                    {(Object.keys(rewardCategoryLabels) as RealRewardCategory[]).map((category) => <option key={category} value={category}>{rewardCategoryLabels[category]}</option>)}
+                  </select>
+                </label>
+                <button className="soft-button" onClick={addRealReward}>＋ 添加奖励</button>
               </div>
             </section>
 
@@ -1065,8 +1396,12 @@ export default function PetApp() {
                       <button onClick={() => moveTask(task.id, 1)} disabled={index === data.tasks.length - 1} aria-label="下移">↓</button>
                       <button onClick={() => deleteTask(task.id)} aria-label={`删除${task.title}`}>🗑️</button>
                     </div>
-                    <label className="proof-prompt-input">验收时让孩子说明
-                      <input value={task.proofPrompt} onChange={(event) => updateTask(task.id, { proofPrompt: event.target.value.slice(0, 60) })} aria-label={`${task.title}验收提示`} />
+                    <label className="proof-prompt-input">
+                      <span className="proof-toggle">
+                        <input type="checkbox" checked={task.requiresProof} onChange={(event) => updateTask(task.id, { requiresProof: event.target.checked })} />
+                        需要孩子填写完成说明
+                      </span>
+                      <input disabled={!task.requiresProof} value={task.proofPrompt} onChange={(event) => updateTask(task.id, { proofPrompt: event.target.value.slice(0, 60) })} aria-label={`${task.title}验收提示`} />
                     </label>
                   </div>
                 ))}
@@ -1125,10 +1460,33 @@ export default function PetApp() {
       {pendingBuy && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="buy-title">
           <div className="modal-card buy-card">
-            <span className="buy-emoji">{pendingBuy.icon}</span>
+            <img className="reward-confirm-art" src={pendingBuy.image} alt="" />
             <h2 id="buy-title">带走{pendingBuy.name}？</h2>
             <p>需要使用 <strong>{pendingBuy.price}</strong> 枚金币</p>
             <div className="modal-actions"><button onClick={() => setPendingBuy(null)}>再想想</button><button className="primary-wide" onClick={confirmBuy}>确认购买</button></div>
+          </div>
+        </div>
+      )}
+
+      {pendingAvatar && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="avatar-unlock-title">
+          <div className="modal-card buy-card">
+            <img className="reward-confirm-art" src={pendingAvatar.image} alt="" />
+            <h2 id="avatar-unlock-title">让{pendingAvatar.name}加入小队？</h2>
+            <p>一次解锁需要 <strong>{pendingAvatar.price}</strong> 枚金币，以后可以随时切换。</p>
+            <div className="modal-actions"><button onClick={() => setPendingAvatar(null)}>再想想</button><button className="primary-wide" onClick={confirmAvatarUnlock}>确认解锁</button></div>
+          </div>
+        </div>
+      )}
+
+      {pendingReward && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="reward-request-title">
+          <div className="modal-card buy-card">
+            <img className="reward-confirm-art" src={pendingReward.image} alt="" />
+            <h2 id="reward-request-title">申请兑换“{pendingReward.name}”？</h2>
+            <p>{pendingReward.description}</p>
+            <p>现在会预扣 <strong>{pendingReward.price}</strong> 枚金币。家长兑现后留档；如果拒绝，会自动按原价退款。</p>
+            <div className="modal-actions"><button onClick={() => setPendingReward(null)}>再想想</button><button className="primary-wide" onClick={confirmRealReward}>确认申请</button></div>
           </div>
         </div>
       )}
@@ -1159,24 +1517,33 @@ export default function PetApp() {
   );
 }
 
-function PetPicker({ onChoose }: { onChoose: (type: PetType, nickname: string) => void }) {
-  const [type, setType] = useState<PetType>("snake");
+function PetPicker({ onChoose }: { onChoose: (avatarId: AvatarId, nickname: string) => void }) {
+  const [avatarId, setAvatarId] = useState<AvatarId>("pet-snake");
   const [name, setName] = useState("小青");
+  const freeAvatars = avatarCatalog.filter((avatar) => freeAvatarIds.includes(avatar.id));
   return (
     <div className="modal-backdrop welcome-backdrop" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
       <div className="welcome-card">
         <span className="welcome-sun">☀️</span>
         <p className="eyebrow">WELCOME, LITTLE EXPLORER</p>
         <h2 id="welcome-title">选一个暑假小伙伴</h2>
-        <p>全新冒险小队到齐了，小蛇也在等你！</p>
+        <p>先从五位免费伙伴中选一位，之后还可以在图鉴里切换。</p>
         <div className="pet-options">
-          {petTypes.map((petType) => {
-            const pet = petFace(petType);
-            return <button key={petType} className={type === petType ? "selected" : ""} onClick={() => setType(petType)}><img src={pet.image} alt="" /><strong>{pet.label}</strong><i>{type === petType ? "✓" : ""}</i></button>;
-          })}
+          {freeAvatars.map((avatar) => (
+            <button
+              key={avatar.id}
+              className={avatarId === avatar.id ? "selected" : ""}
+              onClick={() => {
+                setAvatarId(avatar.id);
+                setName(avatar.defaultNickname);
+              }}
+            >
+              <img src={avatar.image} alt="" /><strong>{avatar.name}</strong><i>{avatarId === avatar.id ? "✓" : ""}</i>
+            </button>
+          ))}
         </div>
         <label className="name-field">给它取个名字<input value={name} onChange={(event) => setName(event.target.value.slice(0, 8))} placeholder="最多8个字" /></label>
-        <button className="start-button" onClick={() => onChoose(type, name)}>一起开始暑假冒险！</button>
+        <button className="start-button" onClick={() => onChoose(avatarId, name)}>一起开始暑假冒险！</button>
         <small>不需要注册，也不会收集个人信息</small>
       </div>
     </div>
