@@ -147,3 +147,33 @@ test("confirmed old local snapshot restores history without rolling settings bac
   assert.equal(result.settings.missedFeedCoins, 7);
   assert.deepEqual(result.care.fedDates, ["2026-07-30"]);
 });
+
+test("a later parent snapshot cannot roll back the child's selected avatar", async () => {
+  const local = createInitialGameData([]);
+  const child = createInitialGameData([]);
+  child.pet.avatarId = "pet-cat";
+  child.pet.nickname = "小月亮";
+  const parent = createInitialGameData([]);
+  parent.pet.avatarId = "pet-dog";
+  parent.pet.nickname = "旧名字";
+  parent.settings.missedFeedCoins = 9;
+
+  const result = await settleFamilySnapshots(local, [
+    {
+      eventId: "child-selects-cat",
+      role: "child",
+      createdAt: "2026-08-01T08:00:00.000Z",
+      data: child,
+    },
+    {
+      eventId: "parent-approves-later",
+      role: "parent",
+      createdAt: "2026-08-01T08:05:00.000Z",
+      data: parent,
+    },
+  ], {}, "avatar-order-test", "child");
+
+  assert.equal(result.pet.avatarId, "pet-cat");
+  assert.equal(result.pet.nickname, "小月亮");
+  assert.equal(result.settings.missedFeedCoins, 9);
+});

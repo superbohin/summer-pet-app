@@ -1,4 +1,4 @@
-const APP_VERSION = "0.5.3";
+const APP_VERSION = "0.5.4";
 const SCOPE_URL = new URL(self.registration.scope);
 const SCOPE_KEY = SCOPE_URL.pathname.replace(/[^a-z0-9]+/gi, "-") || "root";
 const CACHE_PREFIX = `summer-pet-shell-${SCOPE_KEY}-`;

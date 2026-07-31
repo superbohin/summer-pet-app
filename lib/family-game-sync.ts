@@ -407,7 +407,11 @@ export function mergeSyncedGameData(
   const ledgerBalance = balanceFromLedger(transactions);
   const parentOwnsConfiguration = snapshot.role === "parent";
   const configurationSource = parentOwnsConfiguration ? incoming : local;
-  const activitySource = incoming;
+  // Parent devices own rules and approvals, but their cumulative snapshot can
+  // contain an older copy of the child's appearance. Keep the latest merged
+  // child activity when a later parent snapshot is applied so avatar switches
+  // do not visibly succeed and then roll back during synchronization.
+  const activitySource = snapshot.role === "child" ? incoming : local;
   const purchasedItemIds = new Set(transactions
     .filter((entry) =>
       entry.kind === "purchase" &&

@@ -1075,12 +1075,21 @@ export default function PetApp({
                       const current = data.pet.avatarId === avatar.id;
                       return (
                         <article className={`avatar-card ${current ? "current" : ""}`} key={avatar.id}>
-                          <img className="avatar-art" src={appBaseUrl(avatar.image)} alt={avatar.name} />
-                          <div>
+                          <div className="avatar-art-frame" aria-hidden="true">
+                            <img
+                              className="avatar-art"
+                              src={appBaseUrl(avatar.image)}
+                              alt=""
+                              width="180"
+                              height="180"
+                              draggable={false}
+                            />
+                          </div>
+                          <div className="avatar-copy">
                             <h4>{avatar.name}</h4>
                             <p>{current ? "现在正在一起冒险" : owned ? "已经加入我的图鉴" : `需要 ${avatar.price} 枚金币解锁`}</p>
                           </div>
-                          <button onClick={() => selectAvatar(avatar)} disabled={current || (!owned && data.pet.coins < avatar.price)}>
+                          <button type="button" onClick={() => selectAvatar(avatar)} disabled={current || (!owned && data.pet.coins < avatar.price)}>
                             {current ? "正在使用" : owned ? "切换角色" : <>🪙 {avatar.price} 解锁</>}
                           </button>
                         </article>

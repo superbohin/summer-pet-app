@@ -2709,7 +2709,7 @@ p {
 .avatar-card {
   position: relative;
   display: grid;
-  grid-template-rows: 180px auto auto;
+  grid-template-rows: minmax(0, 180px) auto auto;
   gap: 8px;
   min-width: 0;
   padding: 12px;
@@ -2725,7 +2725,35 @@ p {
   box-shadow: 0 10px 26px rgba(44, 143, 81, 0.16);
 }
 
-.avatar-art,
+.avatar-art-frame {
+  position: relative;
+  z-index: 0;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  place-items: center;
+  pointer-events: none;
+  isolation: isolate;
+}
+
+.avatar-art {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 10px 10px rgba(40, 67, 53, 0.15));
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
 .shop-art,
 .reward-art {
   width: 100%;
@@ -2745,6 +2773,19 @@ p {
   min-height: 38px;
   color: var(--muted);
   font-size: 13px;
+}
+
+.avatar-copy {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+
+.avatar-card button {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  touch-action: manipulation;
 }
 
 .avatar-card button,
@@ -3130,7 +3171,7 @@ p {
   }
 
   .avatar-card {
-    grid-template-rows: 138px auto auto;
+    grid-template-rows: minmax(0, 138px) auto auto;
   }
 
   .reward-grid {

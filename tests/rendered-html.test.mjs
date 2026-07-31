@@ -96,6 +96,20 @@ test("parent section shortcuts preserve the GitHub Pages hash route", async () =
   assert.match(appSource, /scrollToParentSection\("parent-backup"\)/);
 });
 
+test("avatar art is bounded and cannot cover the name or switch button", async () => {
+  const [appSource, cssSource] = await Promise.all([
+    readFile(new URL("../app/PetApp.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /className="avatar-art-frame"/);
+  assert.match(appSource, /width="180"/);
+  assert.match(appSource, /height="180"/);
+  assert.match(appSource, /<button type="button" onClick=\{\(\) => selectAvatar\(avatar\)\}/);
+  assert.match(cssSource, /\.avatar-art-frame[\s\S]*?overflow: hidden;/);
+  assert.match(cssSource, /\.avatar-art[\s\S]*?pointer-events: none;/);
+  assert.match(cssSource, /\.avatar-card button \{[\s\S]*?z-index: 2;/);
+});
+
 test("keeps update, migration and recovery safeguards explicit", async () => {
   const [appSource, dataSource, catalogSource] = await Promise.all([
     readFile(new URL("../app/PetApp.tsx", import.meta.url), "utf8"),
