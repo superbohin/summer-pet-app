@@ -950,7 +950,10 @@ export class GitHubFamilyClient {
     this.branch = options.branch ?? "main";
     this.workflowRef = options.workflowRef ?? "family-sync.yml";
     this.apiBaseUrl = (options.apiBaseUrl ?? "https://api.github.com").replace(/\/$/, "");
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    // Safari brand-checks Window.fetch. Keeping the native function as an
+    // instance field and calling `this.fetchImpl(...)` changes its receiver to
+    // GitHubFamilyClient and throws `Illegal invocation` on iPadOS.
+    this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
   }
 
   private endpoint(path: string): string {

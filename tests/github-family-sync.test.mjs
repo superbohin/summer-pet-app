@@ -355,6 +355,28 @@ test("GitHub client reads contents, dispatches base64 events, and updates config
   assert.equal(JSON.parse(update.init.body).sha, "config-sha-before");
 });
 
+test("GitHub client keeps the native fetch receiver bound to the browser global", { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async function receiverCheckedFetch() {
+      assert.equal(this, globalThis);
+      return Response.json({
+        sha: "bound-fetch-sha",
+        encoding: "base64",
+        content: Buffer.from(JSON.stringify({ schemaVersion: 1 })).toString("base64"),
+      });
+    };
+
+    const client = new GitHubFamilyClient({
+      owner: "family-owner",
+      repo: "private-family-data",
+    });
+    assert.equal((await client.readConfig("test-token")).sha, "bound-fetch-sha");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("Action validator appends one file and refuses to overwrite the same event ID", async () => {
   const { householdKey, childDevice, config } = await familyFixture();
   const event = await createEncryptedEvent({
