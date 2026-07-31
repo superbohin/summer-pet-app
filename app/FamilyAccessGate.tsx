@@ -335,7 +335,7 @@ export default function FamilyAccessGate({
     renderApp && context ? renderApp(context) : approvedContent ?? children;
 
   return (
-    <main className="family-access-shell">
+    <main className={`family-access-shell family-surface-${surface}`}>
       <header className="family-access-header">
         <div className="family-access-brand" aria-hidden="true">
           🏠

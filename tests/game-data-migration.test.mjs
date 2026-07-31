@@ -512,8 +512,8 @@ test("enforces proof only where configured and batch approval pays atomically", 
 });
 
 test("catalogs expose all avatars, virtual goods, and default real rewards", () => {
-  assert.equal(avatarCatalog.length, 12);
-  assert.equal(new Set(avatarCatalog.map((avatar) => avatar.id)).size, 12);
+  assert.equal(avatarCatalog.length, 16);
+  assert.equal(new Set(avatarCatalog.map((avatar) => avatar.id)).size, 16);
   assert.deepEqual(freeAvatarIds, [
     "pet-dog",
     "pet-cat",
@@ -528,6 +528,10 @@ test("catalogs expose all avatars, virtual goods, and default real rewards", () 
       "anime-cat": 200,
       "anime-snake": 220,
       "anime-dino": 240,
+      "anime-girl-star": 260,
+      "anime-girl-bloom": 280,
+      "anime-girl-ocean": 300,
+      "anime-girl-moon": 320,
       "eggy-heart-bear": 260,
       "eggy-zai-bear": 280,
       "eggy-blue-cap": 300,
@@ -595,6 +599,35 @@ test("avatar unlock and switch never double charge or change growth history", ()
   assert.equal(switched.data.pet.nickname, "青宝");
   assert.equal(switched.data.pet.xp, 45);
   assert.equal(switched.data.pet.hearts, 6);
+  assert.deepEqual(switched.data.records, initial.records);
+});
+
+test("new anime heroines stay paid and preserve history when unlocked and switched", () => {
+  const initial = createInitialGameData([]);
+  initial.pet.coins = 400;
+  initial.pet.nickname = "小队长";
+  initial.records["2026-07-31"] = {
+    completed: ["read"],
+    rewards: {},
+    fullBonus: false,
+    fullComplete: false,
+  };
+  assert.ok(!initial.pet.ownedAvatars.includes("anime-girl-star"));
+
+  const unlocked = unlockAvatar(
+    initial,
+    "anime-girl-star",
+    "2026-07-31T10:10:00.000Z",
+  );
+  assert.equal(unlocked.unlocked, true);
+  assert.equal(unlocked.data.pet.coins, 140);
+  assert.equal(unlocked.data.transactions.at(-1).coinsDelta, -260);
+  assert.equal(unlocked.data.transactions.at(-1).itemName, "星月魔法师");
+
+  const switched = switchAvatar(unlocked.data, "anime-girl-star");
+  assert.equal(switched.switched, true);
+  assert.equal(switched.data.pet.avatarId, "anime-girl-star");
+  assert.equal(switched.data.pet.nickname, "小队长");
   assert.deepEqual(switched.data.records, initial.records);
 });
 

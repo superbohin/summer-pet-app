@@ -51,6 +51,7 @@ test("includes an installable offline-first manifest and service worker", async 
   assert.match(builtServiceWorker, /"\/assets\/[^"]+\.css"/);
   assert.match(builtServiceWorker, /"\/pets\/snake-v2\.png"/);
   assert.match(builtServiceWorker, /"\/avatars\/anime-dog\.png"/);
+  assert.match(builtServiceWorker, /"\/avatars\/anime-girl-star\.png"/);
   assert.match(builtServiceWorker, /"\/avatars\/eggy-yellow\.png"/);
   assert.match(builtServiceWorker, /"\/shop\/apple\.png"/);
   assert.match(builtServiceWorker, /"\/reward-categories\/gift\.png"/);
@@ -68,6 +69,31 @@ test("ships and precaches every catalog image", async () => {
   for (const image of images) {
     assert.ok(builtServiceWorker.includes(JSON.stringify(image)), `${image} should be precached`);
   }
+});
+
+test("new anime heroine art ships as square RGBA PNG assets", async () => {
+  const paths = [
+    "/avatars/anime-girl-star.png",
+    "/avatars/anime-girl-bloom.png",
+    "/avatars/anime-girl-ocean.png",
+    "/avatars/anime-girl-moon.png",
+  ];
+  for (const path of paths) {
+    const png = await readFile(new URL(`../public${path}`, import.meta.url));
+    assert.equal(png.readUInt32BE(16), 768, `${path} width`);
+    assert.equal(png.readUInt32BE(20), 768, `${path} height`);
+    assert.equal(png[25], 6, `${path} should use RGBA color type`);
+  }
+});
+
+test("parent section shortcuts preserve the GitHub Pages hash route", async () => {
+  const appSource = await readFile(
+    new URL("../app/PetApp.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(appSource, /href=["']#parent-/);
+  assert.match(appSource, /scrollToParentSection\("parent-review"\)/);
+  assert.match(appSource, /scrollToParentSection\("parent-backup"\)/);
 });
 
 test("keeps update, migration and recovery safeguards explicit", async () => {

@@ -7,6 +7,10 @@ export type AvatarId =
   | "anime-cat"
   | "anime-snake"
   | "anime-dino"
+  | "anime-girl-star"
+  | "anime-girl-bloom"
+  | "anime-girl-ocean"
+  | "anime-girl-moon"
   | "eggy-yellow"
   | "eggy-heart-bear"
   | "eggy-zai-bear"
@@ -32,6 +36,10 @@ export const avatarCatalog: readonly AvatarCatalogItem[] = [
   { id: "anime-cat", name: "冷静猫系少年", group: "anime", defaultNickname: "小凛", image: "/avatars/anime-cat.png", price: 200 },
   { id: "anime-snake", name: "翡翠蛇系少年", group: "anime", defaultNickname: "青岚", image: "/avatars/anime-snake.png", price: 220 },
   { id: "anime-dino", name: "活力恐龙少年", group: "anime", defaultNickname: "小龙", image: "/avatars/anime-dino.png", price: 240 },
+  { id: "anime-girl-star", name: "星月魔法师", group: "anime", defaultNickname: "星遥", image: "/avatars/anime-girl-star.png", price: 260 },
+  { id: "anime-girl-bloom", name: "樱花向导", group: "anime", defaultNickname: "花铃", image: "/avatars/anime-girl-bloom.png", price: 280 },
+  { id: "anime-girl-ocean", name: "海蓝乐师", group: "anime", defaultNickname: "澜音", image: "/avatars/anime-girl-ocean.png", price: 300 },
+  { id: "anime-girl-moon", name: "银月骑士", group: "anime", defaultNickname: "月澄", image: "/avatars/anime-girl-moon.png", price: 320 },
   { id: "eggy-yellow", name: "蛋小黄", group: "eggy", defaultNickname: "蛋小黄", image: "/avatars/eggy-yellow.png", price: 0 },
   { id: "eggy-heart-bear", name: "失心熊", group: "eggy", defaultNickname: "失心熊", image: "/avatars/eggy-heart-bear.png", price: 260 },
   { id: "eggy-zai-bear", name: "仔仔熊", group: "eggy", defaultNickname: "仔仔熊", image: "/avatars/eggy-zai-bear.png", price: 280 },

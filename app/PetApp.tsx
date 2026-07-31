@@ -376,6 +376,17 @@ export default function PetApp({
     window.requestAnimationFrame(() => window.scrollTo(0, 0));
   };
 
+  const closeParentOverlay = () => {
+    setParentStage(surface === "parent" ? "open" : "closed");
+  };
+
+  const scrollToParentSection = (sectionId: string) => {
+    document.getElementById(sectionId)?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  };
+
   const updateWithBadges = (next: GameData, previousBadges: string[]) => {
     const badges = Array.from(new Set([...next.badges, ...achievedBadges(next)]));
     const newlyUnlocked = badges.find((id) => !previousBadges.includes(id));
@@ -790,7 +801,7 @@ export default function PetApp({
       await snapshotAndReplaceGameData(initial, "before-reset-to-default");
       setData(initial);
       setResetArmed(false);
-      setParentStage("closed");
+      closeParentOverlay();
       showToast("已恢复默认设置，旧记录已保留安全快照");
     } catch {
       showToast("无法创建安全快照，已取消恢复默认设置");
@@ -876,10 +887,17 @@ export default function PetApp({
       </header>
 
       <section className="status-strip" aria-label="宠物状态">
-        <button className="mini-pet" onClick={() => navigateToTab("home")} aria-label={`去看看${data.pet.nickname}`}>
-          <img src={appBaseUrl(pet.image)} alt="" />
-          <strong>{data.pet.nickname}</strong>
-        </button>
+        {surface === "parent" ? (
+          <div className="mini-pet parent-mini-pet" aria-label={`当前伙伴：${data.pet.nickname}`}>
+            <img src={appBaseUrl(pet.image)} alt="" />
+            <strong>{data.pet.nickname}</strong>
+          </div>
+        ) : (
+          <button className="mini-pet" onClick={() => navigateToTab("home")} aria-label={`去看看${data.pet.nickname}`}>
+            <img src={appBaseUrl(pet.image)} alt="" />
+            <strong>{data.pet.nickname}</strong>
+          </button>
+        )}
         <div className="status-chip"><span>⭐</span><strong>{level}级</strong></div>
         <div className="status-chip coin-chip"><span>🪙</span><strong>{data.pet.coins}</strong></div>
         <div className="status-chip"><span>💗</span><strong>{data.pet.hearts}</strong></div>
@@ -1049,7 +1067,7 @@ export default function PetApp({
                 <div className="avatar-group" key={group}>
                   <div className="avatar-group-title">
                     <h3>{group === "pet" ? "宠物原形" : group === "anime" ? "拟人伙伴" : "蛋仔角色"}</h3>
-                    <p>{group === "pet" ? "四只原形全部免费" : group === "anime" ? "二次元 Q 版少年冒险小队" : "家庭私用角色"}</p>
+                    <p>{group === "pet" ? "四只原形全部免费" : group === "anime" ? "原创二次元少年少女冒险小队" : "家庭私用角色"}</p>
                   </div>
                   <div className="avatar-grid">
                     {avatarCatalog.filter((avatar) => avatar.group === group).map((avatar) => {
@@ -1243,7 +1261,7 @@ export default function PetApp({
       {parentSurface && parentStage === "setup" && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="parent-setup-title">
           <div className="modal-card challenge-card">
-            <button className="modal-close" onClick={() => setParentStage("closed")} aria-label="关闭">×</button>
+            <button className="modal-close" onClick={closeParentOverlay} aria-label="关闭">×</button>
             <span className="modal-icon">🔐</span>
             <h2 id="parent-setup-title">设置家长密码</h2>
             <p>设置4位数字。以后只有家长能验收任务、修改奖励和惩罚规则。</p>
@@ -1259,7 +1277,7 @@ export default function PetApp({
       {parentSurface && parentStage === "challenge" && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="parent-title">
           <div className="modal-card challenge-card">
-            <button className="modal-close" onClick={() => setParentStage("closed")} aria-label="关闭">×</button>
+            <button className="modal-close" onClick={closeParentOverlay} aria-label="关闭">×</button>
             <span className="modal-icon">🔐</span>
             <h2 id="parent-title">家长验证</h2>
             <p>请输入家长设置的4位密码。</p>
@@ -1272,13 +1290,27 @@ export default function PetApp({
       )}
 
       {parentSurface && parentStage === "open" && (
-        <div className="modal-backdrop parent-backdrop" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div
+          className="modal-backdrop parent-backdrop"
+          role={surface === "combined" ? "dialog" : "region"}
+          aria-modal={surface === "combined" ? "true" : undefined}
+          aria-labelledby="settings-title"
+        >
           <div className="parent-panel">
-            <header><div><span className="section-label">FOR PARENTS</span><h2 id="settings-title">家长设置</h2></div>{surface === "combined" && <button className="modal-close" onClick={() => setParentStage("closed")} aria-label="关闭">×</button>}</header>
+            <div className="parent-panel-header-stack">
+              <header><div><span className="section-label">FOR PARENTS</span><h2 id="settings-title">家长设置</h2></div>{surface === "combined" && <button className="modal-close" onClick={closeParentOverlay} aria-label="关闭">×</button>}</header>
+              <nav className="parent-section-nav" aria-label="家长设置分区">
+                <button type="button" onClick={() => scrollToParentSection("parent-review")}>验收</button>
+                <button type="button" onClick={() => scrollToParentSection("parent-rewards")}>奖励</button>
+                <button type="button" onClick={() => scrollToParentSection("parent-tasks")}>任务</button>
+                {parentDevicePanel && <button type="button" onClick={() => scrollToParentSection("parent-devices")}>设备</button>}
+                <button type="button" onClick={() => scrollToParentSection("parent-backup")}>备份</button>
+              </nav>
+            </div>
 
-            {parentDevicePanel}
+            {parentDevicePanel && <div id="parent-devices" className="parent-section-anchor">{parentDevicePanel}</div>}
 
-            <section className="settings-section review-section">
+            <section className="settings-section review-section parent-section-anchor" id="parent-review">
               <div className="review-heading">
                 <div><h3>每日一次批量验收</h3><p className="settings-help">默认全选通过；只有任务有问题时才取消勾选。漏审日期会一直保留。</p></div>
                 <span>{pendingSubmissions.length}</span>
@@ -1354,12 +1386,19 @@ export default function PetApp({
                 <h3>当前伙伴和照料规则</h3>
                 <p className="settings-help">角色统一在商店图鉴里解锁和切换；换外观不会影响昵称、等级、金币或历史。</p>
                 <div className="parent-pet-picker">
-                  <button className="selected" onClick={() => {
-                    setParentStage("closed");
-                    navigateToTab("shop");
-                  }}>
-                    <img src={appBaseUrl(pet.image)} alt="" /><span>{pet.name} · 打开图鉴</span>
-                  </button>
+                  {surface === "parent" ? (
+                    <div className="parent-pet-summary">
+                      <img src={appBaseUrl(pet.image)} alt="" />
+                      <span><strong>{pet.name}</strong><small>请在孩子端“商店－伙伴图鉴”中解锁或切换</small></span>
+                    </div>
+                  ) : (
+                    <button className="selected" onClick={() => {
+                      closeParentOverlay();
+                      navigateToTab("shop");
+                    }}>
+                      <img src={appBaseUrl(pet.image)} alt="" /><span>{pet.name} · 打开图鉴</span>
+                    </button>
+                  )}
                 </div>
               </div>
               <div className="penalty-controls">
@@ -1371,7 +1410,7 @@ export default function PetApp({
               </div>
             </section>
 
-            <section className="settings-section">
+            <section className="settings-section parent-section-anchor" id="parent-rewards">
               <div className="review-heading">
                 <div><h3>现实奖励兑现</h3><p className="settings-help">孩子兑换时已经扣除金币；兑现后留档，拒绝则按兑换原价退款。</p></div>
                 <span>{pendingClaims.length}</span>
@@ -1416,7 +1455,8 @@ export default function PetApp({
                       </label>
                       <div>
                         <label className="reward-active-toggle"><span>启用</span><input type="checkbox" checked={reward.active} onChange={(event) => updateRealReward(reward.id, { active: event.target.checked })} /></label>
-                        <button onClick={() => deleteRealReward(reward.id)} disabled={hasClaims} title={hasClaims ? "已有兑换历史，只能停用" : "删除奖励"}>删除</button>
+                        <button onClick={() => deleteRealReward(reward.id)} disabled={hasClaims}>{hasClaims ? "已有记录" : "删除"}</button>
+                        {hasClaims && <small className="reward-history-note">仅可停用</small>}
                       </div>
                     </div>
                   );
@@ -1435,7 +1475,7 @@ export default function PetApp({
               </div>
             </section>
 
-            <section className="settings-section">
+            <section className="settings-section parent-section-anchor" id="parent-tasks">
               <h3>每日任务</h3>
               <p className="settings-help">可以修改任务、验收提示、奖励和顺序。历史记录不会被改变。</p>
               <div className="task-editor">
@@ -1443,20 +1483,23 @@ export default function PetApp({
                   <div className="task-edit-row" key={task.id}>
                     <button className={`toggle-task ${task.active ? "on" : ""}`} onClick={() => updateTask(task.id, { active: !task.active })} aria-label={`${task.active ? "关闭" : "开启"}${task.title}`}>{task.active ? "✓" : "—"}</button>
                     <input value={task.title} onChange={(event) => updateTask(task.id, { title: event.target.value.slice(0, 20) })} aria-label="任务名称" />
-                    <label>金币<input type="number" min="0" max="99" value={task.coins} onChange={(event) => updateTask(task.id, { coins: Math.max(0, Number(event.target.value) || 0) })} /></label>
-                    <label>经验<input type="number" min="0" max="99" value={task.xp} onChange={(event) => updateTask(task.id, { xp: Math.max(0, Number(event.target.value) || 0) })} /></label>
+                    <label className="task-reward-field task-coin-field">金币<input type="number" min="0" max="99" value={task.coins} onChange={(event) => updateTask(task.id, { coins: Math.max(0, Number(event.target.value) || 0) })} /></label>
+                    <label className="task-reward-field task-xp-field">经验<input type="number" min="0" max="99" value={task.xp} onChange={(event) => updateTask(task.id, { xp: Math.max(0, Number(event.target.value) || 0) })} /></label>
                     <div className="row-actions">
                       <button onClick={() => moveTask(task.id, -1)} disabled={index === 0} aria-label="上移">↑</button>
                       <button onClick={() => moveTask(task.id, 1)} disabled={index === data.tasks.length - 1} aria-label="下移">↓</button>
                       <button onClick={() => deleteTask(task.id)} aria-label={`删除${task.title}`}>🗑️</button>
                     </div>
-                    <label className="proof-prompt-input">
-                      <span className="proof-toggle">
-                        <input type="checkbox" checked={task.requiresProof} onChange={(event) => updateTask(task.id, { requiresProof: event.target.checked })} />
-                        需要孩子填写完成说明
-                      </span>
-                      <input disabled={!task.requiresProof} value={task.proofPrompt} onChange={(event) => updateTask(task.id, { proofPrompt: event.target.value.slice(0, 60) })} aria-label={`${task.title}验收提示`} />
-                    </label>
+                    <div className="proof-prompt-input">
+                      <label className="proof-toggle" htmlFor={`proof-toggle-${task.id}`}>
+                        <input id={`proof-toggle-${task.id}`} type="checkbox" checked={task.requiresProof} onChange={(event) => updateTask(task.id, { requiresProof: event.target.checked })} />
+                        <span>需要孩子填写完成说明</span>
+                      </label>
+                      <label className="proof-prompt-detail" htmlFor={`proof-prompt-${task.id}`}>
+                        <span>验收提示</span>
+                        <input id={`proof-prompt-${task.id}`} disabled={!task.requiresProof} value={task.proofPrompt} onChange={(event) => updateTask(task.id, { proofPrompt: event.target.value.slice(0, 60) })} />
+                      </label>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1466,7 +1509,7 @@ export default function PetApp({
               </div>
             </section>
 
-            <section className="settings-section settings-two-column">
+            <section className="settings-section settings-two-column parent-section-anchor" id="parent-backup">
               <div>
                 <h3>使用偏好</h3>
                 <label className="switch-row"><span>🔊 音效</span><input type="checkbox" checked={data.settings.sound} onChange={(event) => setData((current) => ({ ...current, settings: { ...current.settings, sound: event.target.checked } }))} /></label>
