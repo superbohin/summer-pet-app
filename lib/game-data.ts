@@ -177,7 +177,7 @@ type LegacyGameDataV3 = {
   meta: GameMeta;
 };
 
-export const APP_VERSION = "0.5.4";
+export const APP_VERSION = "0.6.0";
 export const CURRENT_SCHEMA_VERSION = 4;
 export const FULL_BONUS_COINS = 20;
 export const PRIMARY_STORAGE_KEY = "summer-pet-data";

@@ -57,6 +57,11 @@ export type DeviceRequest = {
   requestedAt: string;
 };
 
+export type HouseholdRequestProofKey = {
+  key: CryptoKey;
+  encodedKey: string;
+};
+
 export type DeviceRolePeriod = {
   role: DeviceRole;
   validFrom: string;
@@ -361,6 +366,54 @@ export async function deriveHouseholdKey(
     false,
     ["encrypt", "decrypt"],
   );
+}
+
+/**
+ * Derives a domain-separated HMAC key from the non-extractable household key.
+ * CloudBase stores only this request-authorization key, never the AES key used
+ * to decrypt family history.
+ */
+export async function deriveHouseholdRequestProofKey(
+  householdKey: CryptoKey,
+  householdId: string,
+): Promise<HouseholdRequestProofKey> {
+  if (!householdId) throw new TypeError("householdId is required");
+  const reservedIv = new Uint8Array([
+    0x53, 0x50, 0x52, 0x51, 0x2d, 0x50, 0x52, 0x4f, 0x4f, 0x46, 0x2d, 0x31,
+  ]);
+  const material = new Uint8Array(
+    await webCrypto().subtle.encrypt(
+      {
+        name: "AES-GCM",
+        iv: reservedIv,
+        additionalData: encoder.encode(`request-proof:${householdId}`),
+      },
+      householdKey,
+      encoder.encode("summer-pet-device-request-proof-v1"),
+    ),
+  );
+  return {
+    key: await webCrypto().subtle.importKey(
+      "raw",
+      material,
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    ),
+    encodedKey: bytesToBase64(material),
+  };
+}
+
+export async function createHouseholdRequestProof(
+  key: CryptoKey,
+  payload: unknown,
+) {
+  const signature = await webCrypto().subtle.sign(
+    "HMAC",
+    key,
+    encoder.encode(canonicalStringify(payload)),
+  );
+  return bytesToBase64(new Uint8Array(signature));
 }
 
 async function encryptJson(key: CryptoKey, value: unknown, aad: unknown): Promise<EncryptedJson> {

@@ -47,6 +47,11 @@ jobs:
 
       - name: Build GitHub Pages app
         run: npm run build:pages
+        env:
+          VITE_CLOUDBASE_ENV_ID: ${{ vars.CLOUDBASE_ENV_ID }}
+          VITE_CLOUDBASE_REGION: ${{ vars.CLOUDBASE_REGION }}
+          VITE_CLOUDBASE_PUBLISHABLE_KEY: ${{ vars.CLOUDBASE_PUBLISHABLE_KEY }}
+          VITE_CLOUDBASE_FUNCTION_NAME: summer-pet-family
 
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v4

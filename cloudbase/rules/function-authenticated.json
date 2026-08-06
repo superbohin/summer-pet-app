@@ -1,0 +1,8 @@
+{
+  "*": {
+    "invoke": false
+  },
+  "summer-pet-family": {
+    "invoke": "auth != null"
+  }
+}

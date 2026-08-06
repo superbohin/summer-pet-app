@@ -1,7 +1,6 @@
 import {
   canonicalStringify,
   createEncryptedEvent,
-  createGithubFamilyClient,
   decryptEvent,
   validateEventEnvelope,
   verifyConfig,
@@ -23,6 +22,7 @@ import {
   mergeSyncedGameData,
   type SyncedGameSnapshot,
 } from "./family-game-sync.ts";
+import { createFamilyRemoteClient } from "./family-sync-provider.ts";
 import type { GameData } from "./game-data.ts";
 
 type SnapshotPayload = {
@@ -228,15 +228,6 @@ export function selectFamilyEventToDispatch(
     null;
 }
 
-function clientFor(profile: FamilyConnectionProfile) {
-  return createGithubFamilyClient({
-    owner: profile.owner,
-    repo: profile.repo,
-    branch: profile.branch,
-    workflowRef: profile.workflowRef,
-  });
-}
-
 function assertReady(profile: FamilyConnectionProfile) {
   if (!profile.householdKey || !profile.config) {
     throw new Error("家庭同步尚未完成配对");
@@ -255,13 +246,13 @@ function assertReady(profile: FamilyConnectionProfile) {
 
 export async function flushFamilyOutbox(profile: FamilyConnectionProfile) {
   await compactFamilyOutboxSnapshots();
-  const client = clientFor(profile);
+  const client = createFamilyRemoteClient(profile);
   const candidate = selectFamilyEventToDispatch(await listQueuedFamilyEvents());
   if (!candidate) {
     return { sent: 0, status: await getFamilyOutboxStatus(), lastError: null };
   }
   try {
-    await client.dispatchEvent(profile.token, candidate.envelope);
+    await client.dispatchEvent(candidate.envelope);
     await markFamilyEventDispatched(candidate.id);
     return { sent: 1, status: await getFamilyOutboxStatus(), lastError: null };
   } catch (error) {
@@ -306,8 +297,8 @@ export async function pullFamilySnapshots(
   persistence: FamilySyncPersistence = {},
 ) {
   await compactFamilyOutboxSnapshots();
-  const client = clientFor(profile);
-  const { config, sha } = await client.readConfig(profile.token);
+  const client = createFamilyRemoteClient(profile);
+  const { config, revision } = await client.readConfig();
   const trustedRoot = profile.trustedRootPublicKey ?? config.rootPublicKey;
   if (!(await verifyConfig(config, trustedRoot))) {
     throw new Error("家庭配置签名不正确，已拒绝同步");
@@ -318,7 +309,7 @@ export async function pullFamilySnapshots(
   const nextProfile: FamilyConnectionProfile = {
     ...profile,
     config,
-    configSha: sha,
+    configSha: revision,
     trustedRootPublicKey: trustedRoot,
   };
   assertReady(nextProfile);
@@ -328,10 +319,7 @@ export async function pullFamilySnapshots(
   const queuedById = new Map(queued.map((item) => [item.id, item]));
   const excludeIds = new Set(profile.lastAppliedEventIds);
   for (const item of queued) excludeIds.delete(item.id);
-  const eventBatch = await client.listEventsWithIndex<SnapshotPayload>(
-    profile.token,
-    excludeIds,
-  );
+  const eventBatch = await client.listEventsWithIndex<SnapshotPayload>(excludeIds);
   const snapshots: FamilySnapshotCandidate[] = [];
   const appliedNow: string[] = [];
   const confirmedQueueIds: string[] = [];

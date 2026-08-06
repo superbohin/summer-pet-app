@@ -1,0 +1,15 @@
+{
+  "envId": "替换为你的-环境ID",
+  "functionRoot": "./cloudbase/functions",
+  "functions": [
+    {
+      "name": "summer-pet-family",
+      "dir": "./cloudbase/functions/summer-pet-family",
+      "runtime": "Nodejs20.19",
+      "handler": "index.main",
+      "timeout": 30,
+      "memorySize": 256,
+      "envVariables": {}
+    }
+  ]
+}

@@ -32,6 +32,7 @@ export interface FamilyDevicePanelProps {
   currentDeviceId?: string;
   online: boolean;
   busy?: boolean;
+  automaticRequests?: boolean;
   onAddDeviceRequest: (requestJson: string) => Promise<void> | void;
   onApproveDevice: (input: ApproveFamilyDeviceInput) => Promise<void> | void;
   onRevokeDevice: (deviceId: string) => Promise<void> | void;
@@ -67,6 +68,7 @@ export default function FamilyDevicePanel({
   currentDeviceId,
   online,
   busy = false,
+  automaticRequests = false,
   onAddDeviceRequest,
   onApproveDevice,
   onRevokeDevice,
@@ -244,35 +246,41 @@ export default function FamilyDevicePanel({
         )}
       </section>
 
-      <section className="family-panel-section" aria-labelledby="add-title">
-        <div className="family-panel-title">
-          <h3 id="add-title">添加设备申请</h3>
-        </div>
-        <form className="family-add-request" onSubmit={addRequest}>
-          <label>
-            <span>设备申请 JSON</span>
-            <textarea
-              value={requestJson}
-              onChange={(event) => setRequestJson(event.target.value)}
-              placeholder="粘贴孩子端或新家长端生成的完整申请 JSON"
-              rows={5}
-              spellCheck={false}
-              disabled={actionDisabled}
-            />
-          </label>
-          <p>
-            批准前请通过可信方式向家人核对 Device ID；申请中不应包含 GitHub
-            Token 或家庭口令。
-          </p>
-          <button
-            type="submit"
-            className="family-button is-secondary"
-            disabled={actionDisabled || !requestJson.trim()}
-          >
-            {localBusyKey === "add-request" ? "正在添加…" : "添加到待批准列表"}
-          </button>
-        </form>
-      </section>
+      {!automaticRequests ? (
+        <section className="family-panel-section" aria-labelledby="add-title">
+          <div className="family-panel-title">
+            <h3 id="add-title">添加设备申请</h3>
+          </div>
+          <form className="family-add-request" onSubmit={addRequest}>
+            <label>
+              <span>设备申请 JSON</span>
+              <textarea
+                value={requestJson}
+                onChange={(event) => setRequestJson(event.target.value)}
+                placeholder="粘贴孩子端或新家长端生成的完整申请 JSON"
+                rows={5}
+                spellCheck={false}
+                disabled={actionDisabled}
+              />
+            </label>
+            <p>
+              批准前请通过可信方式向家人核对 Device ID；申请中不应包含 GitHub
+              Token 或家庭口令。
+            </p>
+            <button
+              type="submit"
+              className="family-button is-secondary"
+              disabled={actionDisabled || !requestJson.trim()}
+            >
+              {localBusyKey === "add-request" ? "正在添加…" : "添加到待批准列表"}
+            </button>
+          </form>
+        </section>
+      ) : (
+        <p className="family-empty-state">
+          新设备申请会由 CloudBase 自动出现在上方，无需复制或粘贴 JSON。
+        </p>
+      )}
 
       <section className="family-panel-section" aria-labelledby="devices-title">
         <div className="family-panel-title">
@@ -374,7 +382,7 @@ export default function FamilyDevicePanel({
 
       <p className="family-panel-disclaimer">
         家庭非商用 · 非官方产品。访问凭据只应保存在各自设备的本机
-        IndexedDB 中。
+        IndexedDB 中；CloudBase 只保存签名配置和端到端加密内容。
       </p>
     </div>
   );

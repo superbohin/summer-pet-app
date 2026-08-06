@@ -10,18 +10,22 @@ import FamilyDevicePanel from "./FamilyDevicePanel";
 import PetApp, { type PetAppSurface } from "./PetApp";
 import {
   approveOrRevokeDevice,
+  canonicalStringify,
   createDeviceIdentity,
-  createGithubFamilyClient,
+  createEncryptedEvent,
   createHouseholdKdfParameters,
   createInitialFamilyConfig,
   decryptFamilyConfig,
   deriveHouseholdKey,
+  deriveHouseholdRequestProofKey,
   exportDeviceRequest,
   verifyConfig,
   type DeviceRequest,
   type FamilyConfig,
 } from "../lib/github-family-sync";
 import {
+  confirmQueuedFamilyEvents,
+  enqueueFamilyEvent,
   getFamilyOutboxStatus,
   loadFamilyConnectionProfile,
   saveFamilyConnectionProfile,
@@ -33,6 +37,12 @@ import {
   syncFamilyNow,
 } from "../lib/family-sync-service";
 import { snapshotAndReplaceGameData, type GameData } from "../lib/game-data";
+import { readCloudBaseBuildConfig } from "../lib/cloudbase-build-config";
+import { createCloudBaseFamilyClient } from "../lib/cloudbase-family-sync";
+import {
+  createFamilyRemoteClient,
+  familySyncProvider,
+} from "../lib/family-sync-provider";
 
 type FamilyAppProps = {
   initialSurface?: PetAppSurface;
@@ -83,6 +93,13 @@ function lightweightDigest(data: GameData) {
   return `${value.length}:${(hash >>> 0).toString(16)}`;
 }
 
+function isMissingRemoteConfig(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /404|not[ -]?found|not initialized|尚未初始化|config[-_ ]missing/i.test(
+    message,
+  );
+}
+
 const EMPTY_OUTBOX_STATUS: FamilyOutboxStatus = {
   unsentCount: 0,
   awaitingConfirmationCount: 0,
@@ -118,7 +135,9 @@ export default function FamilyApp({
   const profileRef = useRef<FamilyConnectionProfile | null>(null);
   const initialSyncStarted = useRef(false);
   const syncInFlight = useRef<Promise<void> | null>(null);
+  const migrationInProgress = useRef(false);
   const lastAutomaticSyncAt = useRef(0);
+  const cloudBaseSettings = useMemo(() => readCloudBaseBuildConfig(), []);
 
   useEffect(() => {
     profileRef.current = profile;
@@ -179,6 +198,7 @@ export default function FamilyApp({
     local: GameData,
     interactive: boolean,
   ) => {
+    if (migrationInProgress.current) return Promise.resolve();
     if (syncInFlight.current) return syncInFlight.current;
     if (interactive) setBusy(true);
     const task = (async () => {
@@ -245,13 +265,8 @@ export default function FamilyApp({
     setBusy(true);
     setErrorMessage("");
     try {
-      const client = createGithubFamilyClient({
-        owner: activeProfile.owner,
-        repo: activeProfile.repo,
-        branch: activeProfile.branch,
-        workflowRef: activeProfile.workflowRef,
-      });
-      const result = await client.readConfig(activeProfile.token);
+      const client = createFamilyRemoteClient(activeProfile);
+      const result = await client.readConfig();
       const trustedRoot = activeProfile.trustedRootPublicKey ?? result.config.rootPublicKey;
       if (!(await verifyConfig(result.config, trustedRoot))) {
         throw new Error("家庭配置签名无法验证");
@@ -262,11 +277,32 @@ export default function FamilyApp({
       ) {
         throw new Error("检测到家庭配置版本回退，已拒绝同步");
       }
+      let pendingDeviceRequests = activeProfile.pendingDeviceRequests;
+      if (
+        familySyncProvider(activeProfile) === "cloudbase" &&
+        client.listDeviceRequests &&
+        activeProfile.identity.deviceId === result.config.rootDeviceId
+      ) {
+        const remoteRequests = await client.listDeviceRequests();
+        const configuredIds = new Set(
+          result.config.devices.map((candidate) => candidate.deviceId),
+        );
+        pendingDeviceRequests = remoteRequests.filter(
+          (candidate) => !configuredIds.has(candidate.deviceId),
+        );
+      }
       const next = {
         ...activeProfile,
         config: result.config,
-        configSha: result.sha,
+        configSha: result.revision,
         trustedRootPublicKey: trustedRoot,
+        pendingDeviceRequests: pendingDeviceRequests.filter(
+          (candidate) => candidate.deviceId !== activeProfile.identity.deviceId ||
+            !result.config.devices.some(
+              (device) =>
+                device.deviceId === candidate.deviceId && device.status === "active",
+            ),
+        ),
       };
       await persistProfile(next);
       const device = result.config.devices.find(
@@ -312,41 +348,48 @@ export default function FamilyApp({
   const createDeviceRequest = useCallback(async (
     input: CreateFamilyDeviceRequestInput,
   ) => {
-    if (!input.githubOwner || !input.githubRepository || !input.githubToken || !input.familyPassphrase) {
-      throw new Error("请完整填写 GitHub 仓库、Token 和家庭口令");
+    if (!input.familyPassphrase) throw new Error("请输入家庭口令");
+    if (!cloudBaseSettings) {
+      throw new Error("发布版尚未配置 CloudBase EnvId 和 Publishable Key");
     }
     setBusy(true);
     setErrorMessage("");
     try {
       const identity = await createDeviceIdentity();
-      const client = createGithubFamilyClient({
-        owner: input.githubOwner,
-        repo: input.githubRepository,
-        branch: input.githubBranch,
-        workflowRef: input.workflowRef,
-      });
+      const client = createCloudBaseFamilyClient(cloudBaseSettings);
       let config: FamilyConfig;
       let configSha: string;
       let householdKey: CryptoKey;
+      let deviceRequestKey: CryptoKey;
       let trustedRootPublicKey: JsonWebKey;
       let approved = false;
 
       try {
-        const existing = await client.readConfig(input.githubToken);
+        const existing = await client.readConfig();
         if (!(await verifyConfig(existing.config))) {
-          throw new Error("仓库中的家庭配置签名无效");
+          throw new Error("CloudBase 中的家庭配置签名无效");
         }
         householdKey = await deriveHouseholdKey(
           input.familyPassphrase,
           existing.config.kdf,
         );
         await decryptFamilyConfig(existing.config, householdKey);
+        deviceRequestKey = (
+          await deriveHouseholdRequestProofKey(
+            householdKey,
+            existing.config.householdId,
+          )
+        ).key;
         config = existing.config;
-        configSha = existing.sha;
+        configSha = existing.revision;
         trustedRootPublicKey = existing.config.rootPublicKey;
       } catch (error) {
-        const missingConfig = error instanceof Error && error.message.includes("(404)");
-        if (input.requestedRole !== "parent" || !missingConfig) throw error;
+        if (input.requestedRole !== "parent" || !isMissingRemoteConfig(error)) {
+          throw error;
+        }
+        if (input.familyPassphrase.trim().length < 10) {
+          throw new Error("首次创建家庭时，家庭口令请至少使用 10 个字符");
+        }
         const kdf = createHouseholdKdfParameters();
         householdKey = await deriveHouseholdKey(input.familyPassphrase, kdf);
         const householdId = `family_${crypto.randomUUID()}`;
@@ -362,8 +405,16 @@ export default function FamilyApp({
           },
           rootDeviceLabel: input.deviceName,
         });
-        const initialized = await client.initializeConfig(input.githubToken, config);
-        configSha = initialized.sha;
+        const requestProof = await deriveHouseholdRequestProofKey(
+          householdKey,
+          config.householdId,
+        );
+        deviceRequestKey = requestProof.key;
+        const initialized = await client.initializeConfigWithRequestKey(
+          config,
+          requestProof.encodedKey,
+        );
+        configSha = initialized.revision;
         trustedRootPublicKey = config.rootPublicKey;
         approved = true;
       }
@@ -375,17 +426,25 @@ export default function FamilyApp({
         (candidate) => candidate.deviceId === identity.deviceId,
       );
       approved = approved || existingDevice?.status === "active";
+      if (!approved) {
+        await createCloudBaseFamilyClient(cloudBaseSettings, {
+          deviceRequestKey,
+        }).submitDeviceRequest(request);
+      }
       const next: FamilyConnectionProfile = {
         id: "current",
-        owner: input.githubOwner,
-        repo: input.githubRepository,
-        branch: input.githubBranch,
-        workflowRef: input.workflowRef,
-        token: input.githubToken,
+        provider: "cloudbase",
+        cloudbase: cloudBaseSettings,
+        owner: "",
+        repo: "",
+        branch: "",
+        workflowRef: "",
+        token: "",
         deviceLabel: input.deviceName,
         requestedRole: input.requestedRole,
         identity,
         householdKey,
+        deviceRequestKey,
         trustedRootPublicKey,
         config,
         configSha,
@@ -401,7 +460,7 @@ export default function FamilyApp({
     } finally {
       setBusy(false);
     }
-  }, [persistProfile]);
+  }, [cloudBaseSettings, persistProfile]);
 
   const handleDataChange = useCallback((data: GameData) => {
     dataMutationRevision.current += 1;
@@ -578,26 +637,198 @@ export default function FamilyApp({
         : { action: "revoke", deviceId },
       activeProfile.identity.privateKey,
     );
-    const client = createGithubFamilyClient({
-      owner: activeProfile.owner,
-      repo: activeProfile.repo,
-      branch: activeProfile.branch,
-      workflowRef: activeProfile.workflowRef,
-    });
+    const client = createFamilyRemoteClient(activeProfile);
     const updated = await client.updateConfig(
-      activeProfile.token,
       config,
       activeProfile.configSha,
     );
-    await persistProfile({
+    const next = {
       ...activeProfile,
       config: updated.config,
-      configSha: updated.sha,
+      configSha: updated.revision,
       pendingDeviceRequests: activeProfile.pendingDeviceRequests.filter(
         (candidate) => candidate.deviceId !== deviceId,
       ),
-    });
+    };
+    await persistProfile(next);
+    if (client.resolveDeviceRequest) {
+      try {
+        await client.resolveDeviceRequest(deviceId);
+      } catch {
+        // The signed config is authoritative; a stale queue entry is harmless
+        // and will be filtered from the parent view on the next refresh.
+      }
+    }
   }, [persistProfile]);
+
+  const migrateToCloudBase = useCallback(async () => {
+    if (!cloudBaseSettings) {
+      throw new Error("发布版尚未配置 CloudBase EnvId 和 Publishable Key");
+    }
+    setBusy(true);
+    setErrorMessage("");
+    migrationInProgress.current = true;
+    const migrationTask = publishQueue.current
+      .catch(() => undefined)
+      .then(async () => {
+      if (syncInFlight.current) {
+        await syncInFlight.current;
+      }
+      const activeProfile = profileRef.current;
+      if (!activeProfile) throw new Error("本机家庭配置尚未读取");
+      if (familySyncProvider(activeProfile) === "cloudbase") return;
+      if (!activeProfile.config || !activeProfile.householdKey) {
+        throw new Error("请先完成原有家庭设备配对，再迁移同步通道");
+      }
+
+      const trustedRoot = activeProfile.trustedRootPublicKey ??
+        activeProfile.config.rootPublicKey;
+      if (!(await verifyConfig(activeProfile.config, trustedRoot))) {
+        throw new Error("本机家庭配置签名验证失败，未执行迁移");
+      }
+
+      const requestProof = await deriveHouseholdRequestProofKey(
+        activeProfile.householdKey,
+        activeProfile.config.householdId,
+      );
+      const targetClient = createCloudBaseFamilyClient(cloudBaseSettings, {
+        deviceRequestKey: requestProof.key,
+      });
+      let target: { config: FamilyConfig; revision: string };
+      const isRoot =
+        activeProfile.identity.deviceId === activeProfile.config.rootDeviceId;
+
+      if (isRoot) {
+        try {
+          target = await targetClient.readConfig();
+          if (!(await verifyConfig(target.config, trustedRoot))) {
+            throw new Error("CloudBase 已有配置无法通过本家庭根密钥验证");
+          }
+          if (
+            target.config.householdId !== activeProfile.config.householdId ||
+            target.config.rootDeviceId !== activeProfile.config.rootDeviceId
+          ) {
+            throw new Error("CloudBase 环境已被另一个家庭初始化");
+          }
+          if (target.config.version < activeProfile.config.version) {
+            target = await targetClient.updateConfig(
+              activeProfile.config,
+              target.revision,
+            );
+          } else if (
+            target.config.version === activeProfile.config.version &&
+            canonicalStringify(target.config) !== canonicalStringify(activeProfile.config)
+          ) {
+            throw new Error("CloudBase 与 GitHub 存在同版本但内容不同的家庭配置");
+          }
+        } catch (error) {
+          if (!isMissingRemoteConfig(error)) throw error;
+          target = await targetClient.initializeConfigWithRequestKey(
+            activeProfile.config,
+            requestProof.encodedKey,
+          );
+        }
+      } else {
+        target = await targetClient.readConfig();
+        if (
+          target.config.householdId !== activeProfile.config.householdId ||
+          target.config.rootDeviceId !== activeProfile.config.rootDeviceId ||
+          !(await verifyConfig(target.config, trustedRoot))
+        ) {
+          throw new Error("CloudBase 家庭空间与本机原家庭不匹配，请先迁移根家长设备");
+        }
+      }
+
+      const activeDevice = target.config.devices.find(
+        (candidate) => candidate.deviceId === activeProfile.identity.deviceId,
+      );
+      if (!activeDevice || activeDevice.status !== "active") {
+        throw new Error("CloudBase 尚未包含本设备，请先迁移并刷新根家长设备");
+      }
+      const local = currentData.current;
+      if (!local) throw new Error("本机记录尚未读取完成，请稍后再迁移");
+      const migrationDataRevision = dataMutationRevision.current;
+      const migrationEvent = await createEncryptedEvent({
+        device: activeProfile.identity,
+        role: activeProfile.requestedRole,
+        op: "state.snapshot",
+        payload: { schemaVersion: 1, data: structuredClone(local) },
+        householdKey: activeProfile.householdKey,
+      });
+      await enqueueFamilyEvent(migrationEvent);
+      await targetClient.dispatchEvent(migrationEvent);
+      const confirmation = await targetClient.listEventsWithIndex(new Set());
+      const confirmedEvent = confirmation.events.find(
+        (candidate) => candidate.id === migrationEvent.id,
+      );
+      if (
+        !confirmedEvent ||
+        canonicalStringify(confirmedEvent) !== canonicalStringify(migrationEvent)
+      ) {
+        throw new Error("CloudBase 未能回读确认完整历史快照，本机仍保留 GitHub 同步");
+      }
+      if (dataMutationRevision.current !== migrationDataRevision) {
+        throw new Error("迁移期间本机记录发生了变化，请再次点击迁移以发送最新记录");
+      }
+      await confirmQueuedFamilyEvents([migrationEvent.id]);
+      if (dataMutationRevision.current !== migrationDataRevision) {
+        throw new Error("迁移提交前本机记录发生了变化，请再次点击迁移");
+      }
+      const digest = lightweightDigest(local);
+      const next: FamilyConnectionProfile = {
+        ...activeProfile,
+        provider: "cloudbase",
+        cloudbase: cloudBaseSettings,
+        deviceRequestKey: requestProof.key,
+        config: target.config,
+        configSha: target.revision,
+        trustedRootPublicKey: trustedRoot,
+        pendingDeviceRequests: [],
+        lastSyncAt: new Date().toISOString(),
+        lastPublishedDigest: digest,
+        lastObservedDigest: digest,
+        lastAppliedEventIds: Array.from(new Set([
+          ...activeProfile.lastAppliedEventIds,
+          migrationEvent.id,
+        ])).slice(-2_000),
+      };
+      await persistProfile(next);
+      lastPublishedDigest.current = digest;
+      if (
+        dataMutationRevision.current !== migrationDataRevision &&
+        currentData.current
+      ) {
+        const latest = structuredClone(currentData.current);
+        const latestDigest = lightweightDigest(latest);
+        await publishFamilySnapshot(next, latest, { flush: false });
+        const queuedLatestProfile: FamilyConnectionProfile = {
+          ...next,
+          lastPublishedDigest: latestDigest,
+          lastObservedDigest: latestDigest,
+        };
+        await persistProfile(queuedLatestProfile);
+        lastPublishedDigest.current = latestDigest;
+      }
+      setSyncReady(true);
+    });
+    publishQueue.current = migrationTask.catch(() => undefined);
+    try {
+      await migrationTask;
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : "迁移到 CloudBase 失败",
+      );
+      throw error;
+    } finally {
+      migrationInProgress.current = false;
+      setBusy(false);
+      await refreshPendingCount();
+    }
+  }, [
+    cloudBaseSettings,
+    persistProfile,
+    refreshPendingCount,
+  ]);
 
   const parentDevicePanel = useMemo(() => {
     if (surface !== "parent" || !profile?.config) return null;
@@ -641,6 +872,7 @@ export default function FamilyApp({
             currentDeviceId={profile.identity.deviceId}
             online={online}
             busy={busy}
+            automaticRequests={familySyncProvider(profile) === "cloudbase"}
             onAddDeviceRequest={addPendingRequest}
             onApproveDevice={(input) =>
               updateDevice("approve", input.deviceId, input.role)
@@ -692,13 +924,17 @@ export default function FamilyApp({
       lastSyncedAt={profile?.lastSyncAt}
       errorMessage={errorMessage}
       initialDeviceName={profile?.deviceLabel}
-      initialGitHubOwner={profile?.owner}
-      initialGitHubRepository={profile?.repo}
-      initialGitHubBranch={profile?.branch ?? "main"}
-      initialWorkflowRef={profile?.workflowRef ?? "family-sync.yml"}
+      cloudBaseReady={Boolean(cloudBaseSettings)}
+      syncProvider={profile ? familySyncProvider(profile) : "cloudbase"}
+      migrationAvailable={Boolean(
+        profile &&
+          cloudBaseSettings &&
+          familySyncProvider(profile) === "github",
+      )}
       onCreateDeviceRequest={createDeviceRequest}
       onRefresh={refreshAccess}
       onSyncNow={syncNow}
+      onMigrateToCloudBase={migrateToCloudBase}
       busy={busy}
       renderApp={() => (
         <PetApp

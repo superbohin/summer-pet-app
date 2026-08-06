@@ -34,11 +34,6 @@ export interface FamilyAccessDevice {
 export interface CreateFamilyDeviceRequestInput {
   deviceName: string;
   requestedRole: FamilyDeviceRole;
-  githubOwner: string;
-  githubRepository: string;
-  githubBranch: string;
-  workflowRef: string;
-  githubToken: string;
   familyPassphrase: string;
 }
 
@@ -51,7 +46,7 @@ export interface FamilyAccessContentContext {
 }
 
 /**
- * Pure presentation contract. FamilyApp owns IndexedDB/GitHub state and passes
+ * Pure presentation contract. FamilyApp owns IndexedDB/remote state and passes
  * only a serializable view model plus callbacks into this component.
  */
 export interface FamilyAccessGateProps {
@@ -68,15 +63,15 @@ export interface FamilyAccessGateProps {
   lastSyncedAt?: string | null;
   errorMessage?: string;
   initialDeviceName?: string;
-  initialGitHubOwner?: string;
-  initialGitHubRepository?: string;
-  initialGitHubBranch?: string;
-  initialWorkflowRef?: string;
+  cloudBaseReady?: boolean;
+  syncProvider?: "github" | "cloudbase";
+  migrationAvailable?: boolean;
   onCreateDeviceRequest: (
     input: CreateFamilyDeviceRequestInput,
   ) => Promise<void> | void;
   onRefresh: () => Promise<void> | void;
   onSyncNow?: () => Promise<void> | void;
+  onMigrateToCloudBase?: () => Promise<void> | void;
   renderApp?: (context: FamilyAccessContentContext) => ReactNode;
   approvedContent?: ReactNode;
   children?: ReactNode;
@@ -250,13 +245,13 @@ export default function FamilyAccessGate({
   lastSyncedAt,
   errorMessage,
   initialDeviceName = "",
-  initialGitHubOwner = "",
-  initialGitHubRepository = "",
-  initialGitHubBranch = "main",
-  initialWorkflowRef = "family-sync.yml",
+  cloudBaseReady = false,
+  syncProvider = "cloudbase",
+  migrationAvailable = false,
   onCreateDeviceRequest,
   onRefresh,
   onSyncNow,
+  onMigrateToCloudBase,
   renderApp,
   approvedContent,
   children,
@@ -266,13 +261,6 @@ export default function FamilyAccessGate({
   const [localBusy, setLocalBusy] = useState(false);
   const [operationError, setOperationError] = useState("");
   const [deviceName, setDeviceName] = useState(initialDeviceName);
-  const [githubOwner, setGitHubOwner] = useState(initialGitHubOwner);
-  const [githubRepository, setGitHubRepository] = useState(
-    initialGitHubRepository,
-  );
-  const [githubBranch, setGitHubBranch] = useState(initialGitHubBranch);
-  const [workflowRef, setWorkflowRef] = useState(initialWorkflowRef);
-  const [githubToken, setGithubToken] = useState("");
   const [familyPassphrase, setFamilyPassphrase] = useState("");
   const busy = externalBusy || localBusy;
 
@@ -305,14 +293,8 @@ export default function FamilyAccessGate({
         await onCreateDeviceRequest({
           deviceName: deviceName.trim() || "我的设备",
           requestedRole: surface,
-          githubOwner: githubOwner.trim(),
-          githubRepository: githubRepository.trim(),
-          githubBranch: githubBranch.trim() || "main",
-          workflowRef: workflowRef.trim() || "family-sync.yml",
-          githubToken,
           familyPassphrase,
         });
-        setGithubToken("");
         setFamilyPassphrase("");
       },
       "设备申请创建失败。",
@@ -367,7 +349,7 @@ export default function FamilyAccessGate({
               <p className="family-eyebrow">首次配置</p>
               <h2>申请成为{roleLabel(surface)}</h2>
               <p>
-                这台设备会在本机生成独立密钥，并创建一份可交给家长批准的设备申请。
+                这台设备会在本机生成独立密钥，并把设备申请自动发送到家长端。
               </p>
               <p>
                 如果要从旧网址迁移，请先在旧站家长设置里导出 JSON 备份；新家长端配置完成后再导入，浏览器不会自动跨网址搬运 IndexedDB。
@@ -376,6 +358,18 @@ export default function FamilyAccessGate({
           </div>
 
           <form className="family-form" onSubmit={createRequest}>
+            {!cloudBaseReady ? (
+              <p className="family-inline-warning" role="status">
+                CloudBase 尚未接入发布版。请先完成环境配置，再刷新本页。
+                <a
+                  href="https://tcb.cloud.tencent.com/dev"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  打开 CloudBase 控制台
+                </a>
+              </p>
+            ) : null}
             <label>
               <span>设备名称</span>
               <input
@@ -385,71 +379,6 @@ export default function FamilyAccessGate({
                 autoComplete="off"
                 maxLength={60}
               />
-            </label>
-            <div className="family-form-row">
-              <label>
-                <span>GitHub 用户或组织</span>
-                <input
-                  value={githubOwner}
-                  onChange={(event) => setGitHubOwner(event.target.value)}
-                  placeholder="例如：xia-family"
-                  autoComplete="off"
-                  autoCapitalize="none"
-                  spellCheck={false}
-                  required
-                />
-              </label>
-              <label>
-                <span>家庭数据仓库</span>
-                <input
-                  value={githubRepository}
-                  onChange={(event) => setGitHubRepository(event.target.value)}
-                  placeholder="例如：summer-pet-data"
-                  autoComplete="off"
-                  autoCapitalize="none"
-                  spellCheck={false}
-                  required
-                />
-              </label>
-            </div>
-            <div className="family-form-row">
-              <label>
-                <span>分支</span>
-                <input
-                  value={githubBranch}
-                  onChange={(event) => setGitHubBranch(event.target.value)}
-                  placeholder="main"
-                  autoComplete="off"
-                  autoCapitalize="none"
-                  spellCheck={false}
-                />
-              </label>
-              <label>
-                <span>同步 Workflow</span>
-                <input
-                  value={workflowRef}
-                  onChange={(event) => setWorkflowRef(event.target.value)}
-                  placeholder="family-sync.yml"
-                  autoComplete="off"
-                  autoCapitalize="none"
-                  spellCheck={false}
-                />
-              </label>
-            </div>
-            <label>
-              <span>GitHub Token</span>
-              <input
-                type="password"
-                value={githubToken}
-                onChange={(event) => setGithubToken(event.target.value)}
-                placeholder="输入后不会回显"
-                autoComplete="off"
-                spellCheck={false}
-                required
-              />
-              <small>
-                仅交给本机适配器保存到 IndexedDB，不会写入页面、网址或申请 JSON。
-              </small>
             </label>
             <label>
               <span>家庭口令</span>
@@ -474,9 +403,9 @@ export default function FamilyAccessGate({
             <button
               type="submit"
               className="family-button is-primary is-wide"
-              disabled={busy}
+              disabled={busy || !cloudBaseReady}
             >
-              {busy ? "正在创建设备申请…" : "生成设备申请"}
+              {busy ? "正在连接家庭空间…" : "连接家庭空间"}
             </button>
           </form>
         </section>
@@ -490,7 +419,7 @@ export default function FamilyAccessGate({
               <p className="family-eyebrow">等待批准</p>
               <h2>请让家长批准这台设备</h2>
               <p>
-                将下面的申请 JSON 交给已批准的家长端。批准后，回到这里刷新状态。
+                申请已经自动发送。让家长在“设置 → 设备”中点击批准，然后回到这里刷新状态。
               </p>
             </div>
           </div>
@@ -498,12 +427,13 @@ export default function FamilyAccessGate({
           {request ? (
             <div className="family-copy-grid">
               <CopyField label="Device ID" value={request.deviceId} />
-              <CopyField label="设备公钥" value={request.publicKey} />
-              <CopyField
-                label="完整设备申请 JSON"
-                value={request.requestJson}
-                multiline
-              />
+              {syncProvider === "github" ? (
+                <CopyField
+                  label="GitHub 旧同步的设备申请 JSON"
+                  value={request.requestJson}
+                  multiline
+                />
+              ) : null}
             </div>
           ) : (
             <p className="family-inline-error" role="alert">
@@ -565,6 +495,28 @@ export default function FamilyAccessGate({
         </section>
       ) : status === "approved" ? (
         <>
+          {migrationAvailable && onMigrateToCloudBase ? (
+            <aside className="family-status-notice" aria-live="polite">
+              <span aria-hidden="true">☁️</span>
+              <div>
+                <strong>可以升级到 CloudBase 实时同步</strong>
+                <p>
+                  本机 IndexedDB 和历史记录不会被清除。根家长设备请最先迁移，其他设备随后迁移。
+                </p>
+              </div>
+              <button
+                type="button"
+                className="family-button is-secondary"
+                onClick={() => void runAction(
+                  onMigrateToCloudBase,
+                  "迁移到 CloudBase 失败，请保留 GitHub 旧同步并稍后重试。",
+                )}
+                disabled={busy}
+              >
+                {busy ? "迁移中…" : "迁移到 CloudBase"}
+              </button>
+            </aside>
+          ) : null}
           <StatusNotice
             online={online}
             pendingEventCount={pendingEventCount}

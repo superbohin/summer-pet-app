@@ -5,9 +5,15 @@ import type {
   FamilyConfig,
   FamilyEventEnvelope,
 } from "./github-family-sync.ts";
+import type { CloudBaseFamilySettings } from "./cloudbase-family-sync.ts";
+
+export type FamilySyncProvider = "github" | "cloudbase";
 
 export type FamilyConnectionProfile = {
   id: "current";
+  /** Profiles created before CloudBase existed omit this and remain GitHub profiles. */
+  provider?: FamilySyncProvider;
+  cloudbase?: CloudBaseFamilySettings;
   owner: string;
   repo: string;
   branch: string;
@@ -17,6 +23,7 @@ export type FamilyConnectionProfile = {
   requestedRole: DeviceRole;
   identity: DeviceKeyMaterial;
   householdKey: CryptoKey | null;
+  deviceRequestKey?: CryptoKey | null;
   trustedRootPublicKey: JsonWebKey | null;
   config: FamilyConfig | null;
   configSha: string | null;
