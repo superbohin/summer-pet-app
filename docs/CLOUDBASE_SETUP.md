@@ -163,6 +163,9 @@ OPA 的平台默认策略可能允许匿名及未登录访问，`default allow :
 [`cloudbase/rules/pg-function-policy.rego`](../cloudbase/rules/pg-function-policy.rego)。
 有既有策略时只合并其中 `summer_pet_*` 规则，不能直接替换。策略中的用户标识映射
 需要真实环境正反向测试，不能仅凭保存成功就认定登录限制有效。
+模板只显式允许目标函数的真实用户会话 POST；已登录仍出现平台权限错误时，不能
+进一步放开公开 Key 或无登录访问作为修复。可用 `scripts/check-cloudbase-access.mjs`
+验证正常路径及编码、旧入口负测；正向健康调用也必须成功。
 注意：CLI 保存 OPA 用户策略会停用旧版网关鉴权；即使新规则只匹配单个函数，也应先
 确认该环境是否存在依赖旧版鉴权的其它入口，并由环境所有者批准后再保存。
 

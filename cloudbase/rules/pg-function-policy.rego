@@ -20,6 +20,14 @@ summer_pet_family_user_session if {
   input.subject.user_id != "anon"
 }
 
+# Explicitly permit the actual session on this function only. Do not rely on
+# environment defaults to allow PG anonymous-login identities.
+allow if {
+  summer_pet_family_request
+  input.request.method == "POST"
+  summer_pet_family_user_session
+}
+
 deny contains "summer-pet-family requires a signed-in user session" if {
   summer_pet_family_request
   input.request.method != "OPTIONS"
