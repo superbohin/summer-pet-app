@@ -58,6 +58,20 @@ test("includes an installable offline-first manifest and service worker", async 
   assert.doesNotMatch(serviceWorker, /indexedDB|localStorage|deleteDatabase/);
 });
 
+test("static page CSP permits the CloudBase gateway without opening arbitrary connections", async () => {
+  const html = await readFile(new URL("../pages-app/index.html", import.meta.url), "utf8");
+  const policy = html.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/)?.[1];
+  assert.ok(policy, "Static entry must declare its CSP");
+  const connections = policy.split(";").map((item) => item.trim())
+    .find((item) => item.startsWith("connect-src "))?.split(/\s+/).slice(1);
+  assert.ok(connections?.includes("https://*.tcloudbasegateway.com"));
+  assert.ok(connections.includes("https://*.tencentcloudapi.com"));
+  assert.ok(connections.includes("https://api.github.com"));
+  assert.ok(!connections.includes("*") && !connections.includes("https:"));
+  assert.match(policy, /script-src 'self';/);
+  assert.match(policy, /object-src 'none';/);
+});
+
 test("ships and precaches every catalog image", async () => {
   const images = [...new Set([
     ...avatarCatalog.map((item) => item.image),

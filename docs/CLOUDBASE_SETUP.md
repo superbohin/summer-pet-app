@@ -74,18 +74,23 @@ API Key、银行卡或付款信息。
 <https://docs.cloudbase.net/database/postgresql/rpc>。
 
 在云函数环境变量中设置 `SUMMER_PET_STORAGE=postgresql`。浏览器不得获得数据库
-密码或服务端 API Key。**不能只因云函数部署成功，就假定运行时管理凭证能访问 PG。**
-必须真实调用 `getConfig` 验证；若管理凭证缺少 PG 的 `role`，可能返回
-`DATABASE_42501` / `function-permission`。此时应为云函数配置服务端 `service_role`
-凭证，不能给 `anon` / `authenticated` 放开家庭表或函数权限来绕过错误。
+密码或服务端 API Key。当前实现使用云函数运行角色自动下发的短期凭据，每次调用时
+读取，不保存或新建长期密钥；通过官方 `ExecutePGSql` 接口调用本应用的三个固定 RPC，
+始终显式指定 `Role=service_role`，不能接受客户端传入 SQL、角色或环境。
+接口说明：<https://cloud.tencent.com/document/product/876/130469>。
 
-在控制台「API Key 管理」创建 **API Key（service_role，服务端）**，只在
-`summer-pet-family` 云函数环境变量中设置 `CLOUDBASE_APIKEY`。不要使用
-Publishable Key 替代，不要把值发到聊天、提交仓库或配置为 `VITE_*`。
-SDK 在 Node 环境自动识别该变量；当前函数固定使用 3.8.2。配置后再真实检查数据库。
+本环境已真实验证运行角色能够执行固定只读权限查询；完整服务仍必须通过 `getConfig`
+和事务验证，不能只因部署成功就宣称同步可用。其它环境若缺少 `tcb:ExecutePGSql`
+权限，应停止并由所有者确认授权；不能自动加权，不能给 `anon` / `authenticated`
+开放家庭表或 RPC 权限。签名调试日志开启时服务会拒绝签名，避免输出敏感签名材料。
+
+之前 `app.rdb()` 获取的临时管理 JWT 缺少 PG `role`，导致 `DATABASE_42501`。
+当前服务端已不通过这条路径访问 PG，也不要求配置 `CLOUDBASE_APIKEY`。普通服务端
+API Key 覆盖整个环境的数据面，不是三张家庭表的最小权限凭据，不应为了排障随意创建。
+不要将任何管理密钥发到聊天、提交仓库或配置为 `VITE_*`。
 
 **后续更新的重要限制：** CLI 3.8.1 的 `fn deploy --force` 默认覆盖环境变量，可能
-删除只在控制台配置的 Key！配置该变量之后，普通代码发布应使用仅更新代码的
+删除只在控制台配置的变量！普通代码发布应使用仅更新代码的
 `tcb fn code update`（先查看该版本 `--help`）；如必须更新完整配置，需安全读取并合并
 保留既有云端环境变量，不能把密钥写入命令行或日志。不能直接重复上面的全量部署。
 
@@ -141,8 +146,8 @@ npm --prefix cloudbase/functions/summer-pet-family install --omit=dev
 tcb fn deploy summer-pet-family --force --install-dependency true
 ```
 
-以上全量部署命令仅用于首次部署或已确保保留所有云端环境变量的配置。已在控制台
-设置 `CLOUDBASE_APIKEY` 后，遵循前述“仅更新代码”的限制，避免更新时删除密钥。
+以上全量部署命令仅用于首次部署或已确保保留所有云端环境变量的配置。后续遵循前述
+“仅更新代码”的限制，避免更新时删除用户在控制台配置的值。
 
 CLI 官方部署命令说明：
 <https://docs.cloudbase.net/cli-v1/functions/deploy>。也可以在控制台新建同名普通云函数，

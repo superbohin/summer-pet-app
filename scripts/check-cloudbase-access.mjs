@@ -82,7 +82,14 @@ try {
   if (!realSession) throw Object.assign(new Error("Missing real session"), { code: "SESSION_MISSING" });
   // Send the actual user token explicitly to isolate gateway behavior from SDK
   // transport selection; never substitute the Publishable Key for this check.
-  for (const origin of [null, "https://superbohin.github.io"]) {
+  const origins = [
+    { name: "signed-in-anonymous-session", value: null },
+    { name: "anonymous-pages-origin", value: "https://superbohin.github.io" },
+    ...(process.env.CLOUDBASE_STATIC_ORIGIN
+      ? [{ name: "anonymous-static-origin", value: new URL(process.env.CLOUDBASE_STATIC_ORIGIN).origin }]
+      : []),
+  ];
+  for (const { name, value: origin } of origins) {
     const response = await fetch(`${base}${path}`, {
       method: "POST", signal: AbortSignal.timeout(20_000),
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...(origin ? { Origin: origin } : {}) },
@@ -94,11 +101,19 @@ try {
     const result = resultObject(body);
     const ok = result?.ok === true && result?.data?.service === "summer-pet-family";
     const policyDenied = raw.includes("summer-pet-family requires a signed-in user session");
+    const code = typeof body?.code === "string" && /^[A-Z0-9_]{2,80}$/.test(body.code)
+      ? body.code : undefined;
+    const requestId = response.headers.get("x-request-id");
+    const safeRequestId = typeof requestId === "string" && /^[a-zA-Z0-9-]{10,80}$/.test(requestId)
+      ? requestId : undefined;
     const sourceMessage = body?.message ?? body?.error?.message;
     const safeMessage = typeof sourceMessage === "string" ? sourceMessage
       .replaceAll(token, "[redacted]").replaceAll(publishableKey, "[redacted]")
       .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[redacted]").slice(0, 300) : undefined;
-    console.log(JSON.stringify({ check: origin ? "anonymous-pages-origin" : "signed-in-anonymous-session", status: response.status, ok, policyDenied, message: safeMessage }));
+    console.log(JSON.stringify({ check: name, status: response.status, ok, policyDenied,
+      code, requestId: safeRequestId, emptyResponse: raw.length === 0,
+      ...(origin ? { corsAllowed: response.headers.get("access-control-allow-origin") === origin } : {}),
+      message: safeMessage }));
     if (!ok) failed = true;
   }
 } catch (error) {

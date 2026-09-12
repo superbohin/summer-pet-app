@@ -2,9 +2,10 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 
 const cloudbase = process.env.SUMMER_PET_STORAGE === "postgresql"
-  ? require("@cloudbase/js-sdk")
+  ? null
   : require("@cloudbase/node-sdk");
 const { createPgDocumentStore } = require("./pg-store");
+const { createPgCloudApiClient } = require("./pg-cloud-api");
 const {
   canonicalStringify,
   validateInitialConfig,
@@ -400,19 +401,15 @@ exports.main = async (event, context) => {
   assertPlainObject(event, "event");
   const action = event.action;
   if (typeof action !== "string") throw serviceError("INVALID_ARGUMENT", "action is required");
+  if (action === "health") {
+    return { ok: true, data: { service: "summer-pet-family", version: "1", schemaVersion: 1 } };
+  }
 
-  const app = cloudbase.init({
-    env: cloudbase.SYMBOL_CURRENT_ENV ?? cloudbase.SYMBOL_DEFAULT_ENV,
-    context,
-  });
   const db = process.env.SUMMER_PET_STORAGE === "postgresql"
-    ? createPgDocumentStore(app.rdb())
-    : app.database();
+    ? createPgDocumentStore(createPgCloudApiClient())
+    : cloudbase.init({ env: cloudbase.SYMBOL_CURRENT_ENV ?? cloudbase.SYMBOL_DEFAULT_ENV, context }).database();
   let data;
   switch (action) {
-    case "health":
-      data = { service: "summer-pet-family", version: "1", schemaVersion: 1 };
-      break;
     case "getConfig":
       data = await getConfig(db);
       break;
