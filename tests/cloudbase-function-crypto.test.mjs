@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { webcrypto } from "node:crypto";
 import { createRequire } from "node:module";
 import test from "node:test";
 
@@ -54,6 +55,74 @@ test("CloudBase function crypto accepts configs, requests and events made by the
       .deviceId,
     identity.deviceId,
   );
+});
+
+test("CloudBase initialization accepts the signed config of the pinned root", async () => {
+  const { config } = await fixture();
+  assert.equal(
+    await cloudCrypto.validateInitialConfig(config, config.rootDeviceId),
+    config,
+  );
+});
+
+test("CloudBase initialization rejects a valid config from a different root", async () => {
+  const { config } = await fixture();
+  const trustedRoot = await createDeviceIdentity();
+  assert.equal(await cloudCrypto.verifyConfig(config), true);
+  await assert.rejects(
+    cloudCrypto.validateInitialConfig(config, trustedRoot.deviceId),
+    { code: "UNTRUSTED_ROOT" },
+  );
+  await assert.rejects(
+    cloudCrypto.validateInitialConfig(config, ` ${config.rootDeviceId} `),
+    { code: "UNTRUSTED_ROOT" },
+  );
+});
+
+test("CloudBase initialization rejects a forged pinned device ID even when re-signed", async () => {
+  const { config, identity } = await fixture();
+  const trustedRoot = await createDeviceIdentity();
+  const forged = {
+    ...config,
+    rootDeviceId: trustedRoot.deviceId,
+    devices: config.devices.map((device) => ({
+      ...device,
+      deviceId: trustedRoot.deviceId,
+    })),
+  };
+  const payload = { ...forged };
+  delete payload.signature;
+  forged.signature = Buffer.from(
+    await webcrypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      identity.privateKey,
+      new TextEncoder().encode(cloudCrypto.canonicalStringify(payload)),
+    ),
+  ).toString("base64");
+  await assert.rejects(
+    cloudCrypto.validateInitialConfig(forged, trustedRoot.deviceId),
+    { code: "INVALID_CONFIG" },
+  );
+});
+
+test("CloudBase initialization rejects a forged signature despite a matching pin", async () => {
+  const { config } = await fixture();
+  const signature = Buffer.from(config.signature, "base64");
+  signature[0] ^= 1;
+  const tampered = { ...config, signature: signature.toString("base64") };
+  await assert.rejects(
+    cloudCrypto.validateInitialConfig(tampered, config.rootDeviceId),
+    { code: "INVALID_CONFIG" },
+  );
+  await assert.rejects(cloudCrypto.validateInitialConfig(tampered), {
+    code: "INVALID_CONFIG",
+  });
+});
+
+test("CloudBase initialization preserves compatibility when the root pin is unset", async () => {
+  const { config } = await fixture();
+  assert.equal(await cloudCrypto.validateInitialConfig(config), config);
+  assert.equal(await cloudCrypto.validateInitialConfig(config, ""), config);
 });
 
 test("CloudBase function verifies family-bound device request proofs", async () => {

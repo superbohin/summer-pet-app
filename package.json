@@ -1,6 +1,6 @@
 {
   "name": "summer-pet-pwa",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -16,6 +16,7 @@
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
     "test": "npm run build && node --experimental-strip-types --test tests/*.test.mjs",
     "typecheck:app": "tsc --noEmit -p tsconfig.app.json",
+    "check:cloudbase": "node --env-file-if-exists=.env.local --experimental-strip-types scripts/check-cloudbase.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern pages-dist",
     "db:generate": "drizzle-kit generate"
   },

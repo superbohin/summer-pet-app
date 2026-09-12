@@ -1,5 +1,6 @@
 {
   "envId": "替换为你的-环境ID",
+  "region": "ap-shanghai",
   "functionRoot": "./cloudbase/functions",
   "functions": [
     {
@@ -9,7 +10,10 @@
       "handler": "index.main",
       "timeout": 30,
       "memorySize": 256,
-      "envVariables": {}
+      "envVariables": {
+        "SUMMER_PET_STORAGE": "postgresql",
+        "SUMMER_PET_ROOT_DEVICE_ID": ""
+      }
     }
   ]
 }

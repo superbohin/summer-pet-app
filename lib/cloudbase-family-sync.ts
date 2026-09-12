@@ -22,19 +22,27 @@ type CloudBaseCallResult<T> = {
   data: T;
 };
 
+type CloudBaseFailure = {
+  message?: string;
+  code?: string;
+  requestId?: string;
+};
+
+type CloudBaseSessionResult = {
+  data: { session?: unknown } | null;
+  error: CloudBaseFailure | null;
+};
+
 type CloudBaseApp = {
-  auth(): {
-    getLoginState(): Promise<unknown>;
-    signInAnonymously(): Promise<{
-      data: unknown;
-      error: { message?: string } | null;
-    }>;
+  auth: {
+    getSession(): Promise<CloudBaseSessionResult>;
+    signInAnonymously(): Promise<CloudBaseSessionResult>;
   };
-  callFunction<T>(options: {
+  callFunction(options: {
     name: string;
     data: Record<string, unknown>;
     parse?: boolean;
-  }): Promise<{ result: T }>;
+  }): Promise<CloudBaseFailure & { result?: unknown }>;
 };
 
 type CloudBaseSdk = {
@@ -47,6 +55,23 @@ type CloudBaseSdk = {
 };
 
 const DEFAULT_FUNCTION_NAME = "summer-pet-family";
+
+async function loadCloudBaseSdk(): Promise<CloudBaseSdk> {
+  const imported = await import("@cloudbase/js-sdk");
+  return (imported.default ?? imported) as unknown as CloudBaseSdk;
+}
+
+function cloudBaseError(failure: CloudBaseFailure, fallback: string) {
+  const details = [
+    failure.code,
+    failure.requestId ? `请求 ID：${failure.requestId}` : "",
+  ].filter(Boolean);
+  const message = failure.message || fallback;
+  return Object.assign(
+    new Error(details.length ? `${message}（${details.join("；")}）` : message),
+    { code: failure.code, requestId: failure.requestId },
+  );
+}
 
 function required(value: string, label: string) {
   const normalized = value.trim();
@@ -90,50 +115,73 @@ export class CloudBaseFamilyClient implements FamilyRemoteClient {
   readonly settings: CloudBaseFamilySettings;
   private appPromise: Promise<CloudBaseApp> | null = null;
   private readonly deviceRequestKey: CryptoKey | null;
+  private readonly sdkLoader: () => Promise<CloudBaseSdk>;
 
   constructor(
     settings: CloudBaseFamilySettings,
-    options: { deviceRequestKey?: CryptoKey | null } = {},
+    options: {
+      deviceRequestKey?: CryptoKey | null;
+      sdkLoader?: () => Promise<CloudBaseSdk>;
+    } = {},
   ) {
     this.settings = normalizeCloudBaseSettings(settings);
     this.deviceRequestKey = options.deviceRequestKey ?? null;
+    this.sdkLoader = options.sdkLoader ?? loadCloudBaseSdk;
   }
 
   private async app() {
     if (!this.appPromise) {
       this.appPromise = (async () => {
-        const imported = await import("@cloudbase/js-sdk");
-        const sdk = (imported.default ?? imported) as unknown as CloudBaseSdk;
+        const sdk = await this.sdkLoader();
         const app = sdk.init({
           env: this.settings.envId,
           region: this.settings.region,
           accessKey: this.settings.publishableKey,
           timeout: 20_000,
         });
-        const auth = app.auth();
-        const loginState = await auth.getLoginState();
-        if (!loginState) {
+        const auth = app.auth;
+        const session = await auth.getSession();
+        if (session.error) {
+          throw cloudBaseError(session.error, "CloudBase 登录状态检查失败");
+        }
+        // A Publishable Key is not a user session, even if legacy login state exists.
+        if (!session.data?.session) {
           const signedIn = await auth.signInAnonymously();
           if (signedIn.error) {
-            throw new Error(
-              signedIn.error.message || "CloudBase 匿名登录失败，请检查登录方式配置",
+            throw cloudBaseError(
+              signedIn.error,
+              "CloudBase 匿名登录失败，请检查登录方式配置",
             );
+          }
+          if (!signedIn.data?.session) {
+            throw new Error("CloudBase 匿名登录未建立有效会话，请检查登录方式配置");
           }
         }
         return app;
       })();
     }
-    return this.appPromise;
+    const pending = this.appPromise;
+    try {
+      return await pending;
+    } catch (error) {
+      // A later explicit attempt may recover; concurrent failures cannot clear a newer attempt.
+      if (this.appPromise === pending) this.appPromise = null;
+      throw error;
+    }
   }
 
   private async call<T>(action: string, data: Record<string, unknown> = {}) {
     const app = await this.app();
-    const response = await app.callFunction<CloudBaseCallResult<T>>({
+    const response = await app.callFunction({
       name: this.settings.functionName,
       data: { action, ...data },
       parse: true,
     });
-    return parseCallResult<T>(response.result);
+    // The SDK can resolve platform errors instead of rejecting the request.
+    if (response?.code) {
+      throw cloudBaseError(response, "CloudBase 云函数调用失败");
+    }
+    return parseCallResult<T>(response?.result);
   }
 
   async health() {

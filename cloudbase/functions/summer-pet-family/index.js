@@ -1,9 +1,13 @@
 "use strict";
 /* eslint-disable @typescript-eslint/no-require-imports */
 
-const cloudbase = require("@cloudbase/node-sdk");
+const cloudbase = process.env.SUMMER_PET_STORAGE === "postgresql"
+  ? require("@cloudbase/js-sdk")
+  : require("@cloudbase/node-sdk");
+const { createPgDocumentStore } = require("./pg-store");
 const {
   canonicalStringify,
+  validateInitialConfig,
   validateDeviceRequest,
   validateEventEnvelope,
   verifyRequestProof,
@@ -113,9 +117,7 @@ async function getConfig(db) {
 async function initializeConfig(db, input) {
   assertPlainObject(input.config, "config");
   const requestProofKey = assertRequestProofKey(input.requestProofKey);
-  if (!(await verifyConfig(input.config))) {
-    throw serviceError("INVALID_CONFIG", "Initial family config or root signature is invalid");
-  }
+  await validateInitialConfig(input.config, process.env.SUMMER_PET_ROOT_DEVICE_ID);
   let result;
   const transactionResult = await db.runTransaction(async (transaction) => {
     const reference = transaction.collection(CONFIG_COLLECTION).doc(CURRENT_CONFIG_ID);
@@ -403,7 +405,9 @@ exports.main = async (event, context) => {
     env: cloudbase.SYMBOL_CURRENT_ENV ?? cloudbase.SYMBOL_DEFAULT_ENV,
     context,
   });
-  const db = app.database();
+  const db = process.env.SUMMER_PET_STORAGE === "postgresql"
+    ? createPgDocumentStore(app.rdb())
+    : app.database();
   let data;
   switch (action) {
     case "health":

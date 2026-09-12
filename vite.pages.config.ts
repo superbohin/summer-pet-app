@@ -6,6 +6,7 @@ const projectRoot = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineConfig({
   root: fileURLToPath(new URL("./pages-app/", import.meta.url)),
+  envDir: projectRoot,
   base: "./",
   publicDir: fileURLToPath(new URL("./public/", import.meta.url)),
   plugins: [react()],

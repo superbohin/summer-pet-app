@@ -359,6 +359,22 @@ async function verifyConfig(config, trustedRootPublicKey) {
   }
 }
 
+async function validateInitialConfig(config, trustedRootDeviceId) {
+  if (!(await verifyConfig(config))) {
+    fail("INVALID_CONFIG", "Initial family config or root signature is invalid");
+  }
+  // Without a deployment pin, initialize privately before publishing the app.
+  // Compare exactly: a mistyped or whitespace-padded pin must fail closed.
+  if (
+    trustedRootDeviceId !== undefined &&
+    trustedRootDeviceId !== "" &&
+    config.rootDeviceId !== trustedRootDeviceId
+  ) {
+    fail("UNTRUSTED_ROOT", "Initial root device does not match the deployment trust pin");
+  }
+  return config;
+}
+
 function assertEventShape(event) {
   if (
     !event ||
@@ -496,6 +512,7 @@ async function validateDeviceRequest(request) {
 module.exports = {
   FamilyValidationError,
   canonicalStringify,
+  validateInitialConfig,
   validateDeviceRequest,
   validateEventEnvelope,
   verifyRequestProof,
